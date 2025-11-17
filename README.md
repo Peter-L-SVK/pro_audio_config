@@ -66,7 +66,7 @@ cd pro-audio-config
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/Peter-L-SVK/TermTalk
+git clone https://github.com/Peter-L-SVK/pro-audio-config
 cd pro_audio_config
 ```
 
@@ -118,7 +118,7 @@ pro-audio-config
 
 ### Development Build
 ```bash
-git clone https://github.com/Peter-L-SVK/TermTalk
+git clone https://github.com/Peter-L-SVK/pro-audio-config
 cd pro_audio_config
 cargo build
 ```
