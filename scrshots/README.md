@@ -1,12 +1,12 @@
 # Gallery
 
-![Running the program](scrshots/scr1.png)  
+![Running the program](scr1.png)  
 *(After start)*  
 
-![Running the program](scrshots/scr2.png)  
+![Running the program](scr2.png)  
 *(Help -> About)*  
 
-![Running the program](scrshots/scr2.png)  
+![Running the program](scr3.png)  
 *(License)*  
 
 ---
