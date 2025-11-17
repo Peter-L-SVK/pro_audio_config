@@ -57,7 +57,7 @@ As audio companies improve their Linux driver support and PipeWire continues to 
 
 ### Quick Install
 ```bash
-git clone https://github.com/yourusername/pro-audio-config
+git clone https://github.com/Peter-L-SVK/pro-audio-config
 cd pro-audio-config
 ./install.sh
 ```
@@ -205,7 +205,7 @@ For support and questions:
 ## Roadmap
 
 - [ ] Package manager support
-- [ ] Setting all avalaible devices in one session
+- [ ] Setting all available devices in one session
 - [ ] Additional audio backends (JACK)
 - [ ] Preset configurations
 - [ ] Advanced audio routing
