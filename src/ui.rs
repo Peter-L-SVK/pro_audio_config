@@ -1,3 +1,12 @@
+/*
+ * Pro Audio Config - User Interface Module  
+ * Version: 1.0
+ * Copyright (c) 2025 Peter Leukanič
+ * Under MIT License
+ * Feel free to share and modify
+ *
+ * Audio configuration tool for Linux PipeWire/ALSA systems (Jack in mind)
+ */
 
 use gtk::prelude::*;
 #[allow(unused_imports)] // AboutDialog is used in code
@@ -6,6 +15,7 @@ use gtk::{
     Orientation, Frame, ScrolledWindow, Separator, MessageDialog, MessageType, ButtonsType,
     DialogFlags, Window, Adjustment, AboutDialog
 };
+use glib::ControlFlow;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -237,18 +247,18 @@ impl AudioApp {
                             buffer_size_combo.set_active_id(Some("512"));
                         }
                     }
-                    glib::Continue(false)
+                    ControlFlow::Break
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     // Still processing, check again
-                    glib::Continue(true)
+                    ControlFlow::Continue
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     // Thread finished but no result, set defaults
                     sample_rate_combo.set_active_id(Some("48000"));
                     bit_depth_combo.set_active_id(Some("24"));
                     buffer_size_combo.set_active_id(Some("512"));
-                    glib::Continue(false)
+                    ControlFlow::Break
                 }
             }
         });
@@ -320,18 +330,18 @@ impl AudioApp {
                                 show_error_dialog(&format!("Failed to apply settings: {}", e));
                             }
                         }
-                        glib::Continue(false)
+                        ControlFlow::Break
                     }
                     Err(mpsc::TryRecvError::Empty) => {
                         // Still processing, check again
-                        glib::Continue(true)
+			ControlFlow::Continue
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // Thread finished but no result
                         status_label_clone.set_text("Unexpected error");
                         apply_button_clone.set_sensitive(true);
                         show_error_dialog("Unexpected error occurred");
-                        glib::Continue(false)
+                        ControlFlow::Break
                     }
                 }
             });
@@ -367,16 +377,16 @@ impl AudioApp {
                             current_device_label.set_text(&format!("Error detecting device: {}", e));
                         }
                     }
-                    glib::Continue(false)
+                    ControlFlow::Break
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     // Still processing, check again
-                    glib::Continue(true)
-                }
+                    ControlFlow::Continue
+		}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     // Thread finished but no result
                     current_device_label.set_text("Error detecting audio device");
-                    glib::Continue(false)
+                    ControlFlow::Break
                 }
             }
         });

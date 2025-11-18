@@ -1,15 +1,31 @@
 [package]
 name = "pro-audio-config"
-version = "0.1.0"
+version = "1.0.0"
+authors = ["Peter Leukanič"]
 edition = "2021"
+description = "A professional audio configuration tool for Linux systems"
+license = "MIT"
+repository = "https://github.com/Peter-L-SVK/pro-audio-config"
+readme = "README.md"
 
 [dependencies]
-gtk = { version = "0.15", features = ["v3_22"] }
-gio = "0.15"
-glib = "0.15"
-dirs = "5.0"
+gtk = "0.18.2"
+gio = "0.18"
+glib = "0.18"
+dirs = "6.0"
+whoami = "1.5"
 async-channel = "2.0"
-whoami = "1.0"
 
 [dev-dependencies]
-mockall = "0.11"
+mockall = "0.13"
+
+[package.metadata.deb]
+maintainer = "Peter Leukanič"
+copyright = "2025, Peter Leukanič"
+depends = "$auto, pipewire-alsa, wireplumber, policykit-1"
+section = "sound"
+assets = [
+    ["target/release/pro-audio-config", "usr/bin/", "755"],
+    ["icons/48x48/icon.png", "usr/share/icons/hicolor/48x48/apps/pro-audio-config.png", "644"],
+    ["pro-audio-config.desktop", "usr/share/applications/", "644"],
+]

@@ -1,3 +1,13 @@
+/*
+ * Pro Audio Config
+ * Version: 1.0
+ * Copyright (c) 2025 Peter Leukanič
+ * Under MIT License
+ * Feel free to share and modify
+ *
+ * Audio configuration tool for Linux PipeWire/ALSA systems (Jack in mind)
+ */
+
 use pro_audio_config::AudioApp;
 use gtk::prelude::*;
 use gtk::Application;

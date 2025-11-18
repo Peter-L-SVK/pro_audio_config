@@ -1,3 +1,13 @@
+/*
+ * Pro Audio Config - Audio Configuration Module
+ * Version: 1.0
+ * Copyright (c) 2025 Peter Leukanič
+ * Under MIT License
+ * Feel free to share and modify
+ *
+ * Audio configuration tool for Linux PipeWire/ALSA systems (Jack in mind)
+ */
+
 use std::process::Command;
 use whoami;
 
