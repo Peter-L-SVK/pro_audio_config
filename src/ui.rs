@@ -286,140 +286,164 @@ impl AudioApp {
     }
 
     fn detect_all_devices(&self) {
-    let device_combo = self.device_combo.clone();
-    let current_default_device = Arc::clone(&self.current_default_device);
-    
-    // Create channel for communication  
-    let (tx, rx) = mpsc::channel();
-    let rx_arc = Arc::new(Mutex::new(rx));
-    
-    // Spawn thread for device detection
-    std::thread::spawn(move || {
-        let result = detect_all_audio_devices();
-        let _ = tx.send(result);
-    });
-    
-    // Set up timeout to check for result
-    let rx_timeout = Arc::clone(&rx_arc);
-    glib::timeout_add_local(Duration::from_millis(100), move || {
-        let rx_guard = rx_timeout.lock().unwrap();
-        match rx_guard.try_recv() {
-            Ok(result) => {
-                match result {
-                    Ok(devices) => {
-                        // Clear existing items
-                        device_combo.remove_all();
-                        
-                        // Get the stored default device name if available
-                        let default_device_name = {
-                            let stored = current_default_device.lock().unwrap();
-                            if !stored.is_empty() {
-                                // Just use the stored device name directly
-                                format!("Default: {}", stored)
-                            } else {
-                                "Default System Device".to_string()
-                            }
-                        };
-                        
-                        // Add "Default Device" option with actual device name
-                        device_combo.append(Some("default"), &default_device_name);
-                        
-                        // Filter devices to only include output devices AND real hardware
-                        let output_devices: Vec<&AudioDevice> = devices.iter()
-                            .filter(|device| {
-                                // Only output/duplex devices that are real hardware
-                                matches!(device.device_type, DeviceType::Output | DeviceType::Duplex)
-                            })
-                            .collect();
-                        
-                        if !output_devices.is_empty() {
-                            // Group by device type for better organization
-                            let mut regular_outputs = Vec::new();
-                            let mut usb_devices = Vec::new();
-                            let mut hdmi_devices = Vec::new();
+	let device_combo = self.device_combo.clone();
+	let current_default_device = Arc::clone(&self.current_default_device);
+	
+	// Create channel for communication  
+	let (tx, rx) = mpsc::channel();
+	let rx_arc = Arc::new(Mutex::new(rx));
+	
+	// Spawn thread for device detection
+	std::thread::spawn(move || {
+            let result = detect_all_audio_devices();
+            let _ = tx.send(result);
+	});
+	
+	// Set up timeout to check for result
+	let rx_timeout = Arc::clone(&rx_arc);
+	glib::timeout_add_local(Duration::from_millis(100), move || {
+            let rx_guard = rx_timeout.lock().unwrap();
+            match rx_guard.try_recv() {
+		Ok(result) => {
+                    match result {
+			Ok(devices) => {
+                            // Clear existing items
+                            device_combo.remove_all();
                             
-                            for device in output_devices {
-                                let desc_lower = device.description.to_lowercase();
-                                let name_lower = device.name.to_lowercase();
-                                
-                                if desc_lower.contains("usb") || name_lower.contains("usb") {
-                                    usb_devices.push(device);
-                                } else if desc_lower.contains("hdmi") || name_lower.contains("hdmi") {
-                                    hdmi_devices.push(device);
-                                } else {
-                                    regular_outputs.push(device);
-                                }
-                            }
+                            // Get the stored default device name if available
+                            let default_device_name = {
+				let stored = current_default_device.lock().unwrap();
+				if !stored.is_empty() {
+                                    // Just use the stored device name directly
+                                    format!("Default: {}", stored)
+				} else {
+                                    "Default System Device".to_string()
+				}
+                            };
                             
-                            // Add regular outputs first
-                            if !regular_outputs.is_empty() {
-                                device_combo.append(Some("separator1"), "--- Main Outputs ---");
-                                for device in regular_outputs {
-                                    Self::add_device_to_combo(&device_combo, device);
-                                }
-                            }
+                            // Add "Default Device" option with actual device name
+                            device_combo.append(Some("default"), &default_device_name);
                             
-                            // Add USB devices
-                            if !usb_devices.is_empty() {
-                                device_combo.append(Some("separator2"), "--- USB Devices ---");
-                                for device in usb_devices {
-                                    Self::add_device_to_combo(&device_combo, device);
-                                }
-                            }
+                            // Filter devices to only include output devices AND real hardware
+                            let output_devices: Vec<&AudioDevice> = devices.iter()
+				.filter(|device| {
+                                    // Only output/duplex devices that are real hardware
+                                    matches!(device.device_type, DeviceType::Output | DeviceType::Duplex)
+				})
+				.collect();
                             
-                            // Add HDMI devices
-                            if !hdmi_devices.is_empty() {
-                                device_combo.append(Some("separator3"), "--- HDMI Devices ---");
-                                for device in hdmi_devices {
-                                    Self::add_device_to_combo(&device_combo, device);
-                                }
-                            }
-                        } else {
-                            // No output devices found, add a message
-                            device_combo.append(Some("no_devices"), "No output devices found");
-                        }
-                        
-                        // Select "Default Device" by default
-                        device_combo.set_active_id(Some("default"));
-                    }
-                    Err(e) => {
-                        println!("Error detecting devices: {}", e);
-                        // Still add default option
-                        device_combo.append(Some("default"), "Default System Device");
-                        device_combo.set_active_id(Some("default"));
-                    }
-                }
-                ControlFlow::Break
-            }
-            Err(mpsc::TryRecvError::Empty) => ControlFlow::Continue,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                // Add default option as fallback
-                device_combo.append(Some("default"), "Default System Device");
-                device_combo.set_active_id(Some("default"));
-                ControlFlow::Break
-            }
-        }
-    });
-}
+                            if !output_devices.is_empty() {
+				// Group by device type for better organization
+				let mut onboard_devices = Vec::new();
+				let mut pcie_soundcards = Vec::new();
+				let mut usb_devices = Vec::new();
+				let mut hdmi_devices = Vec::new();
+				let mut other_devices = Vec::new();
+				
+				for device in output_devices {
+				    let desc_lower = device.description.to_lowercase();
+				    let name_lower = device.name.to_lowercase();
+				    
+				    if desc_lower.contains("usb") || name_lower.contains("usb") {
+					usb_devices.push(device);
+				    } else if desc_lower.contains("hdmi") || name_lower.contains("hdmi") || desc_lower.contains("displayport") {
+					hdmi_devices.push(device);
+				    } else if desc_lower.contains("realtek") || desc_lower.contains("intel") || desc_lower.contains("hda") || 
+					name_lower.contains("pci-0000") && !name_lower.contains("hdmi") {
+					    onboard_devices.push(device);
+					} else if desc_lower.contains("xonar") || desc_lower.contains("sound blaster") || 
+					desc_lower.contains("creative") || desc_lower.contains("asio") {
+					    pcie_soundcards.push(device);
+					} else {
+					    other_devices.push(device);
+					}
+				}
 
-// Helper function to add devices to combo box with consistent formatting
-fn add_device_to_combo(combo: &ComboBoxText, device: &AudioDevice) {
-    let device_type = match device.device_type {
-        DeviceType::Output => "🔊 Output",
-        DeviceType::Duplex => "🔄 Duplex", 
-        _ => "🔊 Output",
-    };
+				// Add onboard devices first (most common)
+				if !onboard_devices.is_empty() {
+				    device_combo.append(Some("separator1"), "--- Onboard Audio ---");
+				    for device in onboard_devices {
+					Self::add_device_to_combo(&device_combo, device);
+				    }
+				}
+				
+				// Add PCIe sound cards
+				if !pcie_soundcards.is_empty() {
+				    device_combo.append(Some("separator2"), "--- PCIe Sound Cards ---");
+				    for device in pcie_soundcards {
+					Self::add_device_to_combo(&device_combo, device);
+				    }
+				}
+				
+				// Add USB devices
+				if !usb_devices.is_empty() {
+				    device_combo.append(Some("separator3"), "--- USB Audio Interfaces ---");
+				    for device in usb_devices {
+					Self::add_device_to_combo(&device_combo, device);
+				    }
+				}
+				
+				// Add HDMI devices  
+				if !hdmi_devices.is_empty() {
+				    device_combo.append(Some("separator4"), "--- HDMI/DisplayPort Audio ---");
+				    for device in hdmi_devices {
+					Self::add_device_to_combo(&device_combo, device);
+				    }
+				}
+
+				// Add any remaining devices
+				if !other_devices.is_empty() {
+				    device_combo.append(Some("separator5"), "--- Other Audio Devices ---");
+				    for device in other_devices {
+					Self::add_device_to_combo(&device_combo, device);
+				    }
+				}
+                            } else {
+				// No output devices found, add a message
+				device_combo.append(Some("no_devices"), "No output devices found");
+                            }
+                            
+                            // Select "Default Device" by default
+                            device_combo.set_active_id(Some("default"));
+			}
+			Err(e) => {
+                            println!("Error detecting devices: {}", e);
+                            // Still add default option
+                            device_combo.append(Some("default"), "Default System Device");
+                            device_combo.set_active_id(Some("default"));
+			}
+                    }
+                    ControlFlow::Break
+		}
+		Err(mpsc::TryRecvError::Empty) => ControlFlow::Continue,
+		Err(mpsc::TryRecvError::Disconnected) => {
+                    // Add default option as fallback
+                    device_combo.append(Some("default"), "Default System Device");
+                    device_combo.set_active_id(Some("default"));
+                    ControlFlow::Break
+		}
+            }
+	});
+    }
     
-    // Clean the description by removing "SUSPENDED" and any trailing status words
-    let clean_description = clean_device_description(&device.description);
-    
-    let display_text = if clean_description.is_empty() {
-        format!("{} {}", device_type, device.name)
-    } else {
-        format!("{} {} - {}", device_type, device.name, clean_description)
-    };
-    combo.append(Some(&device.id), &display_text);
-}
+    // Helper function to add devices to combo box with consistent formatting
+    fn add_device_to_combo(combo: &ComboBoxText, device: &AudioDevice) {
+	let device_type = match device.device_type {
+            DeviceType::Output => "🔊 Output",
+            DeviceType::Duplex => "🔄 Duplex", 
+            _ => "🔊 Output",
+	};
+	
+	// Clean the description by removing "SUSPENDED" and any trailing status words
+	let clean_description = clean_device_description(&device.description);
+	
+	let display_text = if clean_description.is_empty() {
+            format!("{} {}", device_type, device.name)
+	} else {
+            format!("{} {} - {}", device_type, device.name, clean_description)
+	};
+	combo.append(Some(&device.id), &display_text);
+    }
     
     fn detect_current_settings(&self) {
         let sample_rate_combo = self.sample_rate_combo.clone();
@@ -569,29 +593,32 @@ fn add_device_to_combo(combo: &ComboBoxText, device: &AudioDevice) {
         });
 	
         // Show selection info when device changes
-        self.device_combo.connect_changed(move |combo| {
-            if let Some(active_id) = combo.active_id() {
-                if active_id == "separator" {
-                    // Skip separator
-                    return;
-                }
-                let selection_text = if active_id == "default" {
-                    // Use the stored device name
-                    let stored_name = current_default_device.lock().unwrap();
-                    if !stored_name.is_empty() {
-                        format!("Selected: Default System Device ({})", stored_name)
-                    } else {
-                        "Selected: Default System Device".to_string()
-                    }
-                } else {
-                    // Get the display text and clean it for the selection info
-                    let display_text = combo.active_text().unwrap_or_default();
-                    let clean_text = clean_display_text(&display_text);
-                    format!("Selected: {}", clean_text)
-                };
-                current_device_label.set_text(&selection_text);
-            }
-        });
+	self.device_combo.connect_changed(move |combo| {
+	    if let Some(active_id) = combo.active_id() {
+		// Skip separators and other non-selectable items
+		if active_id.starts_with("separator") || active_id == "no_devices" {
+		    // Immediately revert to the previous valid selection
+		    combo.set_active_id(Some("default"));
+		    return;
+		}
+		
+		let selection_text = if active_id == "default" {
+		    // Use the stored device name
+		    let stored_name = current_default_device.lock().unwrap();
+		    if !stored_name.is_empty() {
+			format!("Selected: Default System Device ({})", stored_name)
+		    } else {
+			"Selected: Default System Device".to_string()
+		    }
+		} else {
+		    // Get the display text and clean it for the selection info
+		    let display_text = combo.active_text().unwrap_or_default();
+		    let clean_text = clean_display_text(&display_text);
+		    format!("Selected: {}", clean_text)
+		};
+		current_device_label.set_text(&selection_text);
+	    }
+	});
     }
 }
 
