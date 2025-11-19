@@ -333,66 +333,58 @@ impl AudioApp {
                             
                             if !output_devices.is_empty() {
 				// Group by device type for better organization
-				let mut onboard_devices = Vec::new();
-				let mut pcie_soundcards = Vec::new();
 				let mut usb_devices = Vec::new();
 				let mut hdmi_devices = Vec::new();
+				let mut pci_devices = Vec::new();
 				let mut other_devices = Vec::new();
 				
 				for device in output_devices {
 				    let desc_lower = device.description.to_lowercase();
 				    let name_lower = device.name.to_lowercase();
+				    let id_lower = device.id.to_lowercase();
 				    
-				    if desc_lower.contains("usb") || name_lower.contains("usb") {
+				    if desc_lower.contains("usb") || name_lower.contains("usb") || id_lower.contains("usb") {
 					usb_devices.push(device);
-				    } else if desc_lower.contains("hdmi") || name_lower.contains("hdmi") || desc_lower.contains("displayport") {
-					hdmi_devices.push(device);
-				    } else if desc_lower.contains("realtek") || desc_lower.contains("intel") || desc_lower.contains("hda") || 
-					name_lower.contains("pci-0000") && !name_lower.contains("hdmi") {
-					    onboard_devices.push(device);
-					} else if desc_lower.contains("xonar") || desc_lower.contains("sound blaster") || 
-					desc_lower.contains("creative") || desc_lower.contains("asio") {
-					    pcie_soundcards.push(device);
-					} else {
-					    other_devices.push(device);
+				    }
+				    else if desc_lower.contains("hdmi") || name_lower.contains("hdmi") || 
+					desc_lower.contains("displayport") || name_lower.contains("displayport") {
+					    hdmi_devices.push(device);
 					}
-				}
-
-				// Add onboard devices first (most common)
-				if !onboard_devices.is_empty() {
-				    device_combo.append(Some("separator1"), "--- Onboard Audio ---");
-				    for device in onboard_devices {
-					Self::add_device_to_combo(&device_combo, device);
+				    else if name_lower.contains("pci") || id_lower.contains("pci") || desc_lower.contains("pci") {
+					pci_devices.push(device);
+				    }
+				    else {
+					other_devices.push(device);
 				    }
 				}
 				
-				// Add PCIe sound cards
-				if !pcie_soundcards.is_empty() {
-				    device_combo.append(Some("separator2"), "--- PCIe Sound Cards ---");
-				    for device in pcie_soundcards {
-					Self::add_device_to_combo(&device_combo, device);
-				    }
-				}
-				
-				// Add USB devices
+				// Add USB devices first (most common for pro audio)
 				if !usb_devices.is_empty() {
-				    device_combo.append(Some("separator3"), "--- USB Audio Interfaces ---");
+				    device_combo.append(Some("separator1"), "--- USB Audio Devices ---");
 				    for device in usb_devices {
+					Self::add_device_to_combo(&device_combo, device);
+				    }
+				}
+				
+				// Add PCI devices (onboard and sound cards)
+				if !pci_devices.is_empty() {
+				    device_combo.append(Some("separator2"), "--- PCI Audio Devices ---");
+				    for device in pci_devices {
 					Self::add_device_to_combo(&device_combo, device);
 				    }
 				}
 				
 				// Add HDMI devices  
 				if !hdmi_devices.is_empty() {
-				    device_combo.append(Some("separator4"), "--- HDMI/DisplayPort Audio ---");
+				    device_combo.append(Some("separator3"), "--- HDMI/DisplayPort Audio ---");
 				    for device in hdmi_devices {
 					Self::add_device_to_combo(&device_combo, device);
 				    }
 				}
-
+				
 				// Add any remaining devices
 				if !other_devices.is_empty() {
-				    device_combo.append(Some("separator5"), "--- Other Audio Devices ---");
+				    device_combo.append(Some("separator4"), "--- Other Audio Devices ---");
 				    for device in other_devices {
 					Self::add_device_to_combo(&device_combo, device);
 				    }
