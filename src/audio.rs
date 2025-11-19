@@ -426,6 +426,9 @@ pub fn apply_audio_settings_with_auth_blocking(settings: AudioSettings) -> Resul
         _ => "S24LE",
     };
 
+    // Extract device pattern from device_id for matching
+    let device_pattern = extract_device_pattern(&settings.device_id);
+
     // Create a script that uses direct environment variable setting
     let script_content = format!(
     r#"#!/bin/bash
@@ -434,6 +437,7 @@ set -e
 echo "=== Starting Audio Configuration ==="
 echo "Running as: $(whoami)"
 echo "Target user: {}"
+echo "Target device: {}"
 
 # Get user ID and runtime directory
 USER_ID=$(id -u {})
@@ -469,18 +473,20 @@ echo "Creating WirePlumber configuration..."
 CONFIG_DIR="/home/{}/.config/wireplumber/main.lua.d"
 run_as_user "mkdir -p \"$CONFIG_DIR\""
 
-# Create custom configuration
+# Create custom configuration targeting specific device
 run_as_user "cat > \"$CONFIG_DIR/99-custom-audio.lua\"" << 'EOF'
 alsa_monitor.rules = {{
-    matches = {{
-        {{
-            {{ "device.name", "matches", "alsa.*" }},
+    {{
+        matches = {{
+            {{
+                {{ "device.name", "matches", "{}" }},
+            }},
         }},
-    }},
-    apply_properties = {{
-        ["audio.rate"] = {},
-        ["audio.format"] = "{}",
-        ["api.alsa.period-size"] = {},
+        apply_properties = {{
+            ["audio.rate"] = {},
+            ["audio.format"] = "{}",
+            ["api.alsa.period-size"] = {},
+        }},
     }},
 }}
 EOF
@@ -518,17 +524,19 @@ echo ""
 echo "Note: Some settings may require application restart to take effect"
 "#,
     username,        // 1st placeholder: Target user
-    username,        // 2nd placeholder: USER_ID
-    username,        // 3rd placeholder: sudo -u
-    username,        // 4th placeholder: CONFIG_DIR
-    settings.sample_rate,  // 5th placeholder: audio.rate
-    format,          // 6th placeholder: audio.format
-    settings.buffer_size,  // 7th placeholder: api.alsa.period-size
-    settings.buffer_size,  // 8th placeholder: clock.force-quantum
-    settings.sample_rate,  // 9th placeholder: Sample Rate in summary
-    settings.bit_depth,    // 10th placeholder: Bit Depth in summary
-    settings.buffer_size,  // 11th placeholder: Buffer Size in summary
-    settings.device_id,    // 12th placeholder: Target Device in summary
+    settings.device_id, // 2nd placeholder: Target device
+    username,        // 3rd placeholder: USER_ID
+    username,        // 4th placeholder: sudo -u
+    username,        // 5th placeholder: CONFIG_DIR
+    device_pattern,  // 6th placeholder: device.name pattern
+    settings.sample_rate,  // 7th placeholder: audio.rate
+    format,          // 8th placeholder: audio.format
+    settings.buffer_size,  // 9th placeholder: api.alsa.period-size
+    settings.buffer_size,  // 10th placeholder: clock.force-quantum
+    settings.sample_rate,  // 11th placeholder: Sample Rate in summary
+    settings.bit_depth,    // 12th placeholder: Bit Depth in summary
+    settings.buffer_size,  // 13th placeholder: Buffer Size in summary
+    settings.device_id,    // 14th placeholder: Target Device in summary
 );
     
     // Write temporary script
@@ -589,6 +597,28 @@ echo "Note: Some settings may require application restart to take effect"
         }
         
         Err(error_msg)
+    }
+}
+
+// Helper function to extract device pattern for WirePlumber matching
+fn extract_device_pattern(device_id: &str) -> String {
+    match device_id {
+        "default" => "alsa.*".to_string(), // Default targets all ALSA devices
+        id if id.starts_with("alsa:") => {
+            // Extract ALSA device name after "alsa:"
+            id.trim_start_matches("alsa:").to_string()
+        }
+        id if id.starts_with("pipewire:") => {
+            // For PipeWire devices, use the node ID directly
+            let node_id = id.trim_start_matches("pipewire:");
+            format!("alsa_card.{}", node_id) // PipeWire ALSA cards follow this pattern
+        }
+        id if id.starts_with("pulse:") => {
+            // For PulseAudio devices, convert to ALSA pattern
+            let pulse_id = id.trim_start_matches("pulse:");
+            format!("alsa_output.{}", pulse_id)
+        }
+        _ => device_id.to_string(), // Fallback to original ID
     }
 }
 
