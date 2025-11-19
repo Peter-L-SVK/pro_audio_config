@@ -1,6 +1,6 @@
 /*
- * Pro Audio Config
- * Version: 1.2
+ * Pro Audio Config - Utils
+ * Version: 1.3
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
