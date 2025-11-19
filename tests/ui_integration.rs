@@ -1,104 +1,83 @@
-//! Integration tests for UI components
+//! Integration tests for UI components and data flow
 
 use pro_audio_config::audio::AudioSettings;
 use pro_audio_config::ui::{show_error_dialog, show_success_dialog};
 
 #[test]
-fn test_audio_settings_struct_ui_integration() {
-    // Test that AudioSettings works well with UI data flow
+fn test_audio_settings_ui_data_flow() {
+    // Test that AudioSettings works well with UI data patterns
     let settings = AudioSettings::new(48000, 24, 512, "default".to_string());
     
-    // Simulate UI data passing
-    let settings_clone = settings.clone();
-    assert_eq!(settings.sample_rate, settings_clone.sample_rate);
+    // Simulate UI data passing through channels or cloning
+    let settings_for_ui = settings.clone();
+    let settings_for_worker = settings.clone();
     
-    // Test that settings can be used in UI context
-    let label_text = format!("{} Hz / {} bit / {} samples / {}", 
-        settings.sample_rate, settings.bit_depth, settings.buffer_size, settings.device_id);
-    assert!(!label_text.is_empty());
-    assert!(label_text.contains("48000"));
-    assert!(label_text.contains("default"));
+    assert_eq!(settings.sample_rate, settings_for_ui.sample_rate);
+    assert_eq!(settings.sample_rate, settings_for_worker.sample_rate);
+    
+    // Test UI display formatting
+    let display_text = format!("{} Hz / {} bit / {} samples", 
+        settings.sample_rate, settings.bit_depth, settings.buffer_size);
+    assert!(!display_text.is_empty());
+    assert!(display_text.contains("48000"));
+    assert!(display_text.contains("24"));
+    assert!(display_text.contains("512"));
 }
 
 #[test]
-fn test_dialog_functions_exist() {
-    // Test that dialog functions can be called (they may not display in tests)
+fn test_dialog_function_safety() {
+    // Test that dialog functions can be safely called
     let result = std::panic::catch_unwind(|| {
-        // Only test dialog creation if GTK is already initialized
+        // Only test if GTK is initialized (unlikely in tests, but safe to check)
         if gtk::is_initialized() {
-            show_error_dialog("Test error message");
-            show_success_dialog("Test success message");
+            show_error_dialog("Test error message for integration test");
+            show_success_dialog("Test success message for integration test");
         } else {
-            // Skip test if GTK not initialized (common in CI environments)
-            println!("GTK not initialized, skipping dialog test");
+            // This is normal in test environments
+            println!("GTK not initialized - skipping actual dialog display");
         }
     });
     
-    assert!(result.is_ok(), "Dialog functions should not panic when called");
+    assert!(result.is_ok(), "Dialog functions should not panic");
 }
 
 #[test]
-fn test_ui_string_formatting() {
-    // Test string formatting used in UI
+fn test_ui_combo_box_simulation() {
+    // Simulate the combo box data structures used in the UI
     let sample_rates = vec![
         (44100, "44.1 kHz - CD Quality"),
         (48000, "48 kHz - Standard Audio"),
         (96000, "96 kHz - High Resolution"),
+        (192000, "192 kHz - Studio Quality"),
     ];
     
-    for (rate, label) in sample_rates {
-        let formatted = format!("{} - {}", rate, label);
-        assert!(!formatted.is_empty());
-        assert!(formatted.contains(&rate.to_string()));
-        assert!(formatted.contains(label));
-    }
+    let bit_depths = vec![
+        (16, "16 bit - CD Quality"),
+        (24, "24 bit - High Resolution"),
+        (32, "32 bit - Studio Quality"),
+    ];
     
     let buffer_sizes = vec![
         (128, "128 samples (2.7ms @48kHz)"),
+        (256, "256 samples (5.3ms @48kHz)"),
         (512, "512 samples (10.7ms @48kHz)"),
-        (2048, "2048 samples (42.7ms @48kHz)"),
+        (1024, "1024 samples (21.3ms @48kHz)"),
     ];
     
-    for (size, label) in buffer_sizes {
-        let formatted = format!("{} - {}", size, label);
-        assert!(!formatted.is_empty());
-        assert!(formatted.contains(&size.to_string()));
-        assert!(formatted.contains(label));
-    }
-}
-
-#[test]
-fn test_combo_box_simulation() {
-    // Simulate combo box behavior without actually creating GTK widgets
-    let mut sample_rates = std::collections::HashMap::new();
-    sample_rates.insert("44100", "44.1 kHz");
-    sample_rates.insert("48000", "48 kHz");
-    sample_rates.insert("96000", "96 kHz");
+    // Test default selections (like the UI does)
+    let default_sample_rate = 48000;
+    let default_bit_depth = 24;
+    let default_buffer_size = 512;
     
-    let mut bit_depths = std::collections::HashMap::new();
-    bit_depths.insert("16", "16 bit");
-    bit_depths.insert("24", "24 bit");
-    bit_depths.insert("32", "32 bit");
+    // Verify defaults exist in our data structures
+    assert!(sample_rates.iter().any(|(rate, _)| *rate == default_sample_rate));
+    assert!(bit_depths.iter().any(|(depth, _)| *depth == default_bit_depth));
+    assert!(buffer_sizes.iter().any(|(size, _)| *size == default_buffer_size));
     
-    let mut buffer_sizes = std::collections::HashMap::new();
-    buffer_sizes.insert("128", "128 samples");
-    buffer_sizes.insert("512", "512 samples");
-    buffer_sizes.insert("1024", "1024 samples");
-    
-    // Simulate active selections
-    let active_sample_rate = "48000";
-    let active_bit_depth = "24";
-    let active_buffer_size = "512";
-    
-    // Verify selections exist in our simulated combo boxes
-    assert!(sample_rates.contains_key(active_sample_rate), "Sample rate {} not found", active_sample_rate);
-    assert!(bit_depths.contains_key(active_bit_depth), "Bit depth {} not found", active_bit_depth);
-    assert!(buffer_sizes.contains_key(active_buffer_size), "Buffer size {} not found", active_buffer_size);
-    
-    // Test parsing (like the real UI does)
-    let sample_rate = active_sample_rate.parse::<u32>().unwrap();
-    let bit_depth = active_bit_depth.parse::<u32>().unwrap();
-    let buffer_size = active_buffer_size.parse::<u32>().unwrap();
+    // Test the parsing logic used in the UI
+    let sample_rate = "48000".parse::<u32>().unwrap_or(44100);
+    let bit_depth = "24".parse::<u32>().unwrap_or(16);
+    let buffer_size = "512".parse::<u32>().unwrap_or(256);
     
     assert_eq!(sample_rate, 48000);
     assert_eq!(bit_depth, 24);
@@ -106,44 +85,29 @@ fn test_combo_box_simulation() {
 }
 
 #[test]
-fn test_audio_settings_from_simulated_ui() {
-    // Test the logic that would be used when getting settings from UI
-    let sample_rate = "48000".parse::<u32>().ok().unwrap_or(44100);
-    let bit_depth = "24".parse::<u32>().ok().unwrap_or(16);
-    let buffer_size = "512".parse::<u32>().ok().unwrap_or(256);
-    let device_id = "default".to_string();
+fn test_ui_fallback_mechanisms() {
+    // Test the fallback logic used throughout the UI
+    let test_cases = vec![
+        // (input, fallback, expected)
+        ("48000", 44100, 48000),
+        ("invalid", 44100, 44100),
+        ("", 44100, 44100),
+        ("not_a_number", 48000, 48000),
+    ];
     
-    let settings = AudioSettings {
-        sample_rate,
-        bit_depth,
-        buffer_size,
-        device_id,
-    };
-    
-    assert_eq!(settings.sample_rate, 48000);
-    assert_eq!(settings.bit_depth, 24);
-    assert_eq!(settings.buffer_size, 512);
-    assert_eq!(settings.device_id, "default");
+    for (input, fallback, expected) in test_cases {
+        let result = input.parse::<u32>().ok().unwrap_or(fallback);
+        assert_eq!(result, expected, "Failed for input '{}' with fallback {}", input, fallback);
+    }
 }
 
 #[test]
-fn test_fallback_values() {
-    // Test the fallback logic used in the UI
-    let invalid_sample_rate = "invalid".parse::<u32>().ok().unwrap_or(48000);
-    let invalid_bit_depth = "invalid".parse::<u32>().ok().unwrap_or(24);
-    let invalid_buffer_size = "invalid".parse::<u32>().ok().unwrap_or(512);
+fn test_ui_string_operations() {
+    // Test string operations used in UI labels and displays
     
-    assert_eq!(invalid_sample_rate, 48000);
-    assert_eq!(invalid_bit_depth, 24);
-    assert_eq!(invalid_buffer_size, 512);
-}
-
-#[test]
-fn test_clean_device_description_helper() {
-    // Test the helper function logic (reimplemented since the original is private)
-    fn clean_device_description(description: &str) -> String {
-        description
-            .replace("SUSPENDED", "")
+    // Device name cleaning (simulating the private helper function)
+    fn clean_device_name(name: &str) -> String {
+        name.replace("SUSPENDED", "")
             .replace("RUNNING", "")
             .replace("IDLE", "")
             .trim()
@@ -153,15 +117,88 @@ fn test_clean_device_description_helper() {
     }
     
     let test_cases = vec![
-        ("PipeWire s32le 4ch 192000Hz SUSPENDED", "PipeWire s32le 4ch 192000Hz"),
-        ("SUSPENDED PipeWire Device", "PipeWire Device"),
-        ("Device - RUNNING", "Device"),
-        ("Normal Device Description", "Normal Device Description"),
-        ("ALSA Device - IDLE", "ALSA Device"),
+        ("PipeWire Device SUSPENDED", "PipeWire Device"),
+        ("ALSA Output - RUNNING", "ALSA Output"),
+        ("USB Audio - IDLE", "USB Audio"),
+        ("Normal Device", "Normal Device"),
+        ("Complex - Device - RUNNING", "Complex - Device"),
     ];
     
     for (input, expected) in test_cases {
-        let result = clean_device_description(input);
-        assert_eq!(result, expected, "Failed for input: '{}'", input);
+        let cleaned = clean_device_name(input);
+        assert_eq!(cleaned, expected, "Failed to clean: '{}'", input);
+    }
+    
+    // Test UI label generation
+    let settings = AudioSettings::new(96000, 32, 1024, "alsa:usb_device".to_string());
+    let status_text = format!("Configured: {}Hz, {}bit, {} samples on {}", 
+        settings.sample_rate, settings.bit_depth, settings.buffer_size, settings.device_id);
+    
+    assert!(status_text.contains("96000"));
+    assert!(status_text.contains("32"));
+    assert!(status_text.contains("1024"));
+    assert!(status_text.contains("usb_device"));
+}
+
+#[test]
+fn test_ui_thread_safety_patterns() {
+    // Test patterns that ensure thread safety in the UI
+    use std::sync::{Arc, Mutex};
+    
+    // Import AudioSettings from the main library
+    use pro_audio_config::audio::AudioSettings;
+    
+    let settings = Arc::new(Mutex::new(AudioSettings::new(48000, 24, 512, "default".to_string())));
+    
+    // Simulate UI thread accessing settings
+    let ui_settings = Arc::clone(&settings);
+    let sample_rate = {
+        let guard = ui_settings.lock().unwrap();
+        guard.sample_rate
+    };
+    assert_eq!(sample_rate, 48000);
+    
+    // Simulate worker thread accessing settings
+    let worker_settings = Arc::clone(&settings);
+    let locked_settings = worker_settings.lock().unwrap();
+    assert_eq!(locked_settings.sample_rate, 48000);
+    // Explicitly drop the lock to avoid deadlocks
+    drop(locked_settings);
+    
+    // Test that we can update settings safely
+    let update_result = std::panic::catch_unwind(|| {
+        let mut settings_guard = settings.lock().unwrap();
+        settings_guard.sample_rate = 96000;
+    });
+    assert!(update_result.is_ok());
+    
+    let updated_settings = settings.lock().unwrap();
+    assert_eq!(updated_settings.sample_rate, 96000);
+}
+
+#[test]
+fn test_error_handling_patterns() {
+    // Test error handling patterns used in the UI
+    
+    // Simulate the error handling from the apply_audio_settings function
+    let error_result: Result<(), String> = Err("Test error message".to_string());
+    
+    match error_result {
+        Ok(()) => {
+            // Success case - would update UI to show success
+            let status_message = "Settings applied successfully";
+            assert!(!status_message.is_empty());
+        }
+        Err(e) => {
+            // Error case - would show error dialog
+            assert!(e.contains("Test error message"));
+            // Simulate error dialog content extraction
+            let error_display = if e.contains("Script failed") {
+                e.split("\n\n").nth(1).unwrap_or(&e).to_string()
+            } else {
+                e
+            };
+            assert!(!error_display.is_empty());
+        }
     }
 }

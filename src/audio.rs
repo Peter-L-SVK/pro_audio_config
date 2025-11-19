@@ -5,11 +5,10 @@
  * Under MIT License
  * Feel free to share and modify
  *
- * Audio configuration tool for Linux PipeWire/ALSA systems (Jack in mind)
+ * Core audio device detection and system interaction
  */
 
 use std::process::Command;
-use whoami;
 
 #[derive(Clone, Debug)]
 pub struct AudioDevice {
@@ -20,7 +19,7 @@ pub struct AudioDevice {
     pub available: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DeviceType {
     Input,
     Output,
@@ -33,7 +32,7 @@ pub struct AudioSettings {
     pub sample_rate: u32,
     pub bit_depth: u32, 
     pub buffer_size: u32,
-    pub device_id: String, // Specific device to configure
+    pub device_id: String,
 }
 
 impl AudioSettings {
@@ -45,24 +44,74 @@ impl AudioSettings {
             device_id,
         }
     }
+
+    pub fn validate(&self) -> Result<(), String> {
+        const VALID_SAMPLE_RATES: [u32; 5] = [44100, 48000, 96000, 192000, 384000];
+        const VALID_BIT_DEPTHS: [u32; 3] = [16, 24, 32];
+        const VALID_BUFFER_SIZES: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
+
+        if !VALID_SAMPLE_RATES.contains(&self.sample_rate) {
+            return Err(format!("Invalid sample rate: {}. Valid rates: {:?}", self.sample_rate, VALID_SAMPLE_RATES));
+        }
+
+        if !VALID_BIT_DEPTHS.contains(&self.bit_depth) {
+            return Err(format!("Invalid bit depth: {}. Valid depths: {:?}", self.bit_depth, VALID_BIT_DEPTHS));
+        }
+
+        if !VALID_BUFFER_SIZES.contains(&self.buffer_size) {
+            return Err(format!("Invalid buffer size: {}. Valid sizes: {:?}", self.buffer_size, VALID_BUFFER_SIZES));
+        }
+
+        if self.device_id.is_empty() {
+            return Err("Device ID cannot be empty".to_string());
+        }
+
+        if !is_valid_device_id(&self.device_id) {
+            return Err(format!("Invalid device ID format: {}. Expected: 'default', 'alsa:...', 'pipewire:...', 'pulse:...'", self.device_id));
+        }
+
+        Ok(())
+    }
+
+    pub fn get_audio_format(&self) -> Result<&'static str, String> {
+        match self.bit_depth {
+            16 => Ok("S16LE"),
+            24 => Ok("S24LE"),
+            32 => Ok("S32LE"),
+            _ => Err(format!("Invalid bit depth: {}", self.bit_depth)),
+        }
+    }
 }
 
+fn is_valid_device_id(device_id: &str) -> bool {
+    // Empty device ID is always invalid
+    if device_id.is_empty() {
+        return false;
+    }
+    
+    // Check for specific valid patterns
+    if device_id == "default" ||
+       device_id.starts_with("alsa:") ||
+       device_id.starts_with("pipewire:") ||
+       device_id.starts_with("pulse:") {
+        return true;
+    }
+    
+    // For other device IDs, they must not contain whitespace
+    !device_id.chars().any(|c| c.is_whitespace())
+}
+
+// Device Detection Functions
 pub fn detect_all_audio_devices() -> Result<Vec<AudioDevice>, String> {
     let mut devices = Vec::new();
     
     println!("=== Scanning for all audio devices ===");
     
-    // Method 1: PipeWire devices (HIGHEST PRIORITY)
-    if let Ok(output) = Command::new("pw-cli")
-        .args(["list-objects", "Node"])
-        .output() {
+    if let Ok(output) = Command::new("pw-cli").args(["list-objects", "Node"]).output() {
         devices.extend(parse_pipewire_devices(&output.stdout)?);
     }
     
-    // Method 2: ALSA devices (fallback)
     devices.extend(detect_alsa_devices()?);
-    
-    // Method 3: PulseAudio devices (lowest priority - compatibility layer)
     devices.extend(detect_pulse_devices()?);
     
     println!("Found {} audio devices", devices.len());
@@ -74,71 +123,38 @@ fn is_real_hardware_device(device: &AudioDevice) -> bool {
     let description = device.description.to_lowercase();
     
     // Skip virtual devices and internal nodes
-    if name.contains("virtual") || 
-       description.contains("virtual") ||
-       name.contains("null") ||
-       description.contains("null") ||
-       name.contains("dummy") ||
-       description.contains("dummy") ||
-       name.contains("echo-cancel") ||
-       description.contains("echo-cancel") ||
-       name.contains("monitor") ||
-       description.contains("monitor") ||
-       name.contains("proaudio") || // Skip our own config nodes
-       description.contains("proaudio") {
-        return false;
-    }
-    
-    // Skip PipeWire internal nodes that aren't actual hardware
-    if device.id.starts_with("pipewire:") {
-        // Look for actual hardware indicators in PipeWire devices
-        if description.contains("internal") && 
-           !description.contains("usb") && 
-           !description.contains("hdmi") && 
-           !description.contains("analog") {
-            return false;
-        }
-        
-        // Skip nodes that are likely virtual or software-based
-        if name.contains("alsa_") && name.contains("playback") ||
-           name.contains("alsa_") && name.contains("capture") {
+    let virtual_indicators = ["virtual", "null", "dummy", "echo-cancel", "monitor", "proaudio"];
+    for indicator in virtual_indicators {
+        if name.contains(indicator) || description.contains(indicator) {
             return false;
         }
     }
     
-    // Skip ALSA devices that are virtual/dummy
-    if device.id.starts_with("alsa:") {
-        if name == "default" || 
-           name.contains("dmix") || 
-           name.contains("dsnoop") || 
-           name.contains("hw") || 
-           name.contains("plughw") || 
-           name.contains("lavrate") || 
-           name.contains("samplerate") || 
-           name.contains("speexrate") || 
-           name.contains("variable") || 
-           name.contains("rate_convert") || 
-           name.contains("linear") || 
-           name.contains("mu-law") || 
-           name.contains("a-law") || 
-           name.contains("float") || 
-           name.contains("oss") || 
-           name.contains("pulse") || 
-           name.contains("upmix") || 
-           name.contains("vdownmix") || 
-           name.contains("usbstream") {
-            return false;
+    // Device-type specific filtering
+    match device.id.split(':').next() {
+        Some("pipewire") => {
+            if description.contains("internal") && 
+               !description.contains("usb") && 
+               !description.contains("hdmi") && 
+               !description.contains("analog") {
+                return false;
+            }
         }
-    }
-    
-    // Skip PulseAudio virtual devices
-    if device.id.starts_with("pulse:") {
-        if name.contains("module-") ||
-           description.contains("module-") ||
-           name == "auto_null" ||
-           description.contains("null output") {
-            return false;
+        Some("alsa") => {
+            let alsa_virtual = ["default", "dmix", "dsnoop", "hw", "plughw", "lavrate", 
+                               "samplerate", "speexrate", "variable", "rate_convert", 
+                               "linear", "mu-law", "a-law", "float", "oss", "pulse", 
+                               "upmix", "vdownmix", "usbstream"];
+            if alsa_virtual.iter().any(|&v| name.contains(v)) {
+                return false;
+            }
         }
+        Some("pulse") => {
+            if name.contains("module-") || name == "auto_null" {
+                return false;
+            }
+        }
+        _ => {}
     }
     
     true
@@ -147,15 +163,11 @@ fn is_real_hardware_device(device: &AudioDevice) -> bool {
 fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
     let mut devices = Vec::new();
     let output_str = String::from_utf8_lossy(output);
-    
     let mut current_device: Option<AudioDevice> = None;
-    let mut device_props: Vec<(String, String)> = Vec::new();
     
     for line in output_str.lines() {
-        // Look for device nodes
         if line.contains("object:") && line.contains("Node") {
             if let Some(device) = current_device.take() {
-                // Only add if it's a real hardware device
                 if is_real_hardware_device(&device) {
                     devices.push(device);
                 }
@@ -167,10 +179,8 @@ fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
                 device_type: DeviceType::Unknown,
                 available: true,
             });
-            device_props.clear();
         }
         
-        // Parse device properties
         if let Some(ref mut device) = current_device {
             if line.contains("node.name") && line.contains('=') {
                 if let Some(name) = line.split('=').nth(1) {
@@ -184,45 +194,15 @@ fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
                 }
             }
             
-            // Determine device type with better classification
             if line.contains("media.class") && line.contains('=') {
                 if let Some(class) = line.split('=').nth(1) {
                     let class_clean = class.trim().trim_matches('"');
-                    device.device_type = match class_clean {
-                        s if s.contains("Audio/Source") => DeviceType::Input,
-                        s if s.contains("Audio/Sink") => DeviceType::Output,
-                        s if s.contains("Audio/Duplex") => DeviceType::Duplex,
-                        s if s.contains("Audio") => {
-                            // For generic Audio class, try to determine from name/description
-                            if device.name.to_lowercase().contains("input") ||
-                               device.description.to_lowercase().contains("input") ||
-                               device.description.to_lowercase().contains("capture") {
-                                DeviceType::Input
-                            } else if device.name.to_lowercase().contains("output") ||
-                                      device.description.to_lowercase().contains("output") ||
-                                      device.description.to_lowercase().contains("playback") {
-                                DeviceType::Output
-                            } else {
-                                DeviceType::Unknown
-                            }
-                        }
-                        _ => DeviceType::Unknown,
-                    };
-                }
-            }
-            
-            // Store additional properties for better filtering
-            if line.contains('=') && !line.trim().starts_with('#') {
-                if let Some((key, value)) = line.split_once('=') {
-                    let key_clean = key.trim().to_string();
-                    let value_clean = value.trim().trim_matches('"').to_string();
-                    device_props.push((key_clean, value_clean));
+                    device.device_type = classify_device_type(class_clean, device);
                 }
             }
         }
     }
     
-    // Don't forget the last device
     if let Some(device) = current_device.take() {
         if is_real_hardware_device(&device) {
             devices.push(device);
@@ -232,20 +212,35 @@ fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
     Ok(devices)
 }
 
+fn classify_device_type(class: &str, device: &AudioDevice) -> DeviceType {
+    match class {
+        s if s.contains("Audio/Source") => DeviceType::Input,
+        s if s.contains("Audio/Sink") => DeviceType::Output,
+        s if s.contains("Audio/Duplex") => DeviceType::Duplex,
+        s if s.contains("Audio") => {
+            let name_lower = device.name.to_lowercase();
+            let desc_lower = device.description.to_lowercase();
+            if name_lower.contains("input") || desc_lower.contains("input") || desc_lower.contains("capture") {
+                DeviceType::Input
+            } else if name_lower.contains("output") || desc_lower.contains("output") || desc_lower.contains("playback") {
+                DeviceType::Output
+            } else {
+                DeviceType::Unknown
+            }
+        }
+        _ => DeviceType::Unknown,
+    }
+}
+
 fn detect_alsa_devices() -> Result<Vec<AudioDevice>, String> {
     let mut devices = Vec::new();
     
-    // Scan ALSA devices using aplay/arecord
-    if let Ok(output) = Command::new("aplay")
-        .args(["-L"])
-        .output() {
+    if let Ok(output) = Command::new("aplay").args(["-L"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         devices.extend(parse_alsa_output(&output_str, DeviceType::Output));
     }
     
-    if let Ok(output) = Command::new("arecord")
-        .args(["-L"])
-        .output() {
+    if let Ok(output) = Command::new("arecord").args(["-L"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         devices.extend(parse_alsa_output(&output_str, DeviceType::Input));
     }
@@ -254,10 +249,9 @@ fn detect_alsa_devices() -> Result<Vec<AudioDevice>, String> {
 }
 
 fn parse_alsa_output(output: &str, device_type: DeviceType) -> Vec<AudioDevice> {
-    let mut devices = Vec::new();
-    
-    for line in output.lines() {
-        if !line.starts_with(' ') && !line.is_empty() && line != "default" {
+    output.lines()
+        .filter(|line| !line.starts_with(' ') && !line.is_empty() && *line != "default")
+        .filter_map(|line| {
             let device = AudioDevice {
                 name: line.to_string(),
                 description: format!("ALSA {}", match device_type {
@@ -269,30 +263,24 @@ fn parse_alsa_output(output: &str, device_type: DeviceType) -> Vec<AudioDevice> 
                 device_type: device_type.clone(),
                 available: true,
             };
-            
-            // Only add real hardware devices
             if is_real_hardware_device(&device) {
-                devices.push(device);
+                Some(device)
+            } else {
+                None
             }
-        }
-    }
-    
-    devices
+        })
+        .collect()
 }
 
 fn detect_pulse_devices() -> Result<Vec<AudioDevice>, String> {
     let mut devices = Vec::new();
     
-    if let Ok(output) = Command::new("pactl")
-        .args(["list", "sinks", "short"])
-        .output() {
+    if let Ok(output) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         devices.extend(parse_pulse_output(&output_str, DeviceType::Output));
     }
     
-    if let Ok(output) = Command::new("pactl")
-        .args(["list", "sources", "short"])
-        .output() {
+    if let Ok(output) = Command::new("pactl").args(["list", "sources", "short"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         devices.extend(parse_pulse_output(&output_str, DeviceType::Input));
     }
@@ -301,362 +289,140 @@ fn detect_pulse_devices() -> Result<Vec<AudioDevice>, String> {
 }
 
 fn parse_pulse_output(output: &str, device_type: DeviceType) -> Vec<AudioDevice> {
-    let mut devices = Vec::new();
-    
-    for line in output.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            let device = AudioDevice {
-                name: parts[1].to_string(), // Use actual device name, not pulse ID
-                description: if parts.len() >= 3 { 
-                    parts[2..].join(" ") 
-                } else { 
-                    "PulseAudio Device".to_string() 
-                },
-                id: format!("pulse:{}", parts[0]), // Store as pulse:ID for resolution
-                device_type: device_type.clone(),
-                available: true,
-            };
-            
-            // Only add real hardware devices
-            if is_real_hardware_device(&device) {
-                devices.push(device);
+    output.lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let device = AudioDevice {
+                    name: parts[1].to_string(),
+                    description: if parts.len() >= 3 { 
+                        parts[2..].join(" ") 
+                    } else { 
+                        "PulseAudio Device".to_string() 
+                    },
+                    id: format!("pulse:{}", parts[0]),
+                    device_type: device_type.clone(),
+                    available: true,
+                };
+                if is_real_hardware_device(&device) {
+                    Some(device)
+                } else {
+                    None
+                }
+            } else {
+                None
             }
-        }
-    }
-    
-    devices
+        })
+        .collect()
 }
 
 fn extract_id(line: &str) -> String {
-    // Extract ID from object line like: "id: 123, object: Node"
-    if let Some(id_part) = line.split(',').find(|s| s.trim().starts_with("id:")) {
-        if let Some(id) = id_part.split(':').nth(1) {
-            return format!("pipewire:{}", id.trim());
-        }
-    }
-    "unknown".to_string()
+    line.split(',')
+        .find(|s| s.trim().starts_with("id:"))
+        .and_then(|id_part| id_part.split(':').nth(1))
+        .map(|id| format!("pipewire:{}", id.trim()))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
+// System Detection Functions
 pub fn detect_audio_device() -> Result<String, String> {
-    // Detect audio system
     let audio_system = detect_audio_system();
     
-    // Get default sink information
-    let pactl_output = Command::new("pactl")
-        .args(["info"])
-        .output();
-        
-    if let Ok(output) = pactl_output {
+    if let Ok(output) = Command::new("pactl").args(["info"]).output() {
         if output.status.success() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
                 if line.starts_with("Default Sink:") {
-                    let sink_full = line.replace("Default Sink:", "");
-                    let sink = sink_full.trim().to_string();
-                    
+                    let sink = line.replace("Default Sink:", "").trim().to_string();
                     return Ok(format!("{}: {}", audio_system, sink));
                 }
             }
         }
     }
     
-    // Fallback with system info
     Ok(format!("{}: Unknown Audio Device", audio_system))
 }
 
+pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
+    if let Ok(output) = Command::new("pw-cli").args(["info", "0"]).output() {
+        if output.status.success() {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+            let (sample_rate, bit_depth, buffer_size) = parse_pipewire_settings(&output_str);
+            return Ok(AudioSettings::new(sample_rate, bit_depth, buffer_size, "default".to_string()));
+        }
+    }
+    
+    // Fallbacks
+    if Command::new("pactl").args(["info"]).output().is_ok() {
+        return Ok(AudioSettings::new(48000, 24, 512, "default".to_string()));
+    }
+    
+    Ok(AudioSettings::new(48000, 24, 512, "default".to_string()))
+}
+
+fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
+    let mut sample_rate = 48000;
+    let mut bit_depth = 24;
+    let mut buffer_size = 512;
+    
+    for line in output.lines() {
+        let trimmed = line.trim();
+        
+        // Parse sample rate - look for exact match
+        if trimmed.starts_with("default.clock.rate =") && !trimmed.contains("allowed-rates") {
+            if let Some(rate_str) = trimmed.split('=').nth(1) {
+                let rate_clean = rate_str.trim().trim_matches('"').trim();
+                if let Ok(rate) = rate_clean.parse::<u32>() {
+                    sample_rate = rate;
+                }
+            }
+        }
+        
+        // Parse audio format
+        if trimmed.starts_with("audio.format =") {
+            if let Some(format_str) = trimmed.split('=').nth(1) {
+                let format = format_str.trim().trim_matches('"').trim();
+                bit_depth = match format {
+                    "S16LE" => 16,
+                    "S24LE" => 24, 
+                    "S32LE" => 32,
+                    _ => 24,
+                };
+            }
+        }
+        
+        // Parse buffer size - only the main quantum value
+        if trimmed.starts_with("default.clock.quantum =") {
+            if let Some(quantum_str) = trimmed.split('=').nth(1) {
+                let quantum_clean = quantum_str.trim().trim_matches('"').trim();
+                if let Ok(quantum) = quantum_clean.parse::<u32>() {
+                    buffer_size = quantum;
+                }
+            }
+        }
+    }
+    
+    (sample_rate, bit_depth, buffer_size)
+}
+
 fn detect_audio_system() -> String {
-    // Check for PipeWire
-    let pipewire_check = Command::new("pw-cli")
-        .args(["info", "0"])
-        .output();
-    
-    if let Ok(output) = pipewire_check {
-        if output.status.success() {
-            return "PipeWire".to_string();
-        }
+    // Check PipeWire
+    if Command::new("pw-cli").args(["info", "0"]).output().is_ok() ||
+       Command::new("systemctl").args(["--user", "is-active", "pipewire"]).output().is_ok() {
+        return "PipeWire".to_string();
     }
     
-    // Check for PipeWire via systemd
-    let pipewire_service = Command::new("systemctl")
-        .args(["--user", "is-active", "pipewire"])
-        .output();
-    
-    if let Ok(output) = pipewire_service {
-        if output.status.success() {
-            return "PipeWire".to_string();
-        }
+    // Check PulseAudio
+    if Command::new("pulseaudio").args(["--check"]).output().is_ok() ||
+       Command::new("systemctl").args(["--user", "is-active", "pulseaudio"]).output().is_ok() {
+        return "PulseAudio".to_string();
     }
     
-    // Check for PulseAudio
-    let pulse_check = Command::new("pulseaudio")
-        .args(["--check"])
-        .output();
-    
-    if let Ok(output) = pulse_check {
-        if output.status.success() {
-            return "PulseAudio".to_string();
-        }
-    }
-    
-    // Check for PulseAudio via systemd
-    let pulse_service = Command::new("systemctl")
-        .args(["--user", "is-active", "pulseaudio"])
-        .output();
-    
-    if let Ok(output) = pulse_service {
-        if output.status.success() {
-            return "PulseAudio".to_string();
-        }
-    }
-    
-    // Unknown audio system
     "Audio System".to_string()
 }
 
-pub fn apply_audio_settings_with_auth_blocking(settings: AudioSettings) -> Result<(), String> {
-    // DEBUG: See what device ID is being passed
-    println!("DEBUG: Selected device_id: {}", settings.device_id);
-
-    // Get the current username
-    let username = whoami::username();
-    
-    // Determine audio format based on bit depth
-    let format = match settings.bit_depth {
-        16 => "S16LE",
-        24 => "S24LE", 
-        32 => "S32LE",
-        _ => "S24LE",
-    };
-
-    // Extract device pattern from device_id for matching
-    let device_pattern = extract_device_pattern(&settings.device_id);
-
-    // Create a script that uses direct environment variable setting
-    let script_content = format!(
-    r#"#!/bin/bash
-set -e
-
-echo "=== Starting Audio Configuration ==="
-echo "Running as: $(whoami)"
-echo "Target user: {}"
-echo "Target device: {}"
-echo "Device pattern: {}"
-
-# Get user ID and runtime directory
-USER_ID=$(id -u {})
-RUNTIME_DIR="/run/user/$USER_ID"
-DBUS_ADDRESS="unix:path=$RUNTIME_DIR/bus"
-
-echo "User ID: $USER_ID"
-echo "Runtime directory: $RUNTIME_DIR"
-
-# Function to run commands as user with proper environment
-run_as_user() {{
-    sudo -u {} XDG_RUNTIME_DIR="$RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="$DBUS_ADDRESS" bash -c "$1"
-}}
-
-echo "Testing user service access..."
-if run_as_user "systemctl --user daemon-reload"; then
-    echo "User service access: OK"
-else
-    echo "User service access: Limited - some operations may fail"
-fi
-
-echo "Stopping audio services..."
-run_as_user "systemctl --user stop wireplumber pipewire pipewire-pulse" || true
-sleep 2
-
-echo "Killing any remaining audio processes..."
-run_as_user "pkill -f wireplumber" || true
-run_as_user "pkill -f pipewire" || true
-run_as_user "pkill -f pipewire-pulse" || true
-sleep 1
-
-echo "Creating WirePlumber configuration..."
-CONFIG_DIR="/home/{}/.config/wireplumber/main.lua.d"
-run_as_user "mkdir -p \"$CONFIG_DIR\""
-
-# Create custom configuration targeting specific device
-run_as_user "cat > \"$CONFIG_DIR/99-custom-audio.lua\"" << 'EOF'
-alsa_monitor.rules = {{
-    {{
-        matches = {{
-            {{
-                {{ "device.name", "matches", "{}" }},
-            }},
-        }},
-        apply_properties = {{
-            ["audio.rate"] = {},
-            ["audio.format"] = "{}",
-            ["api.alsa.period-size"] = {},
-        }},
-    }},
-}}
-EOF
-
-echo "Configuration created successfully"
-
-echo "Restarting audio services..."
-run_as_user "systemctl --user daemon-reload"
-run_as_user "systemctl --user start wireplumber" || echo "Failed to start wireplumber"
-sleep 2
-run_as_user "systemctl --user start pipewire" || echo "Failed to start pipewire"
-run_as_user "systemctl --user start pipewire-pulse" || echo "Failed to start pipewire-pulse"
-sleep 3
-
-echo "Setting buffer size..."
-run_as_user "pw-metadata -n settings 0 clock.force-quantum {}" || echo "Note: Could not set quantum - continuing anyway"
-
-sleep 2
-
-echo "Verifying audio services are running..."
-run_as_user "systemctl --user is-active wireplumber && echo 'WirePlumber: active' || echo 'WirePlumber: inactive'"
-run_as_user "systemctl --user is-active pipewire && echo 'PipeWire: active' || echo 'PipeWire: inactive'"
-
-echo "Current audio settings:"
-run_as_user "pw-cli info 0 2>/dev/null | grep -E '(default.clock.rate|audio.format|default.clock.quantum)'" || echo "Could not query settings - but services may still be working"
-
-echo ""
-echo "=== Audio configuration completed ==="
-echo "Applied settings:"
-echo "  Sample Rate: {} Hz"
-echo "  Bit Depth: {} bit"
-echo "  Buffer Size: {} samples"
-echo "  Target Device: {}"
-echo "  Device Pattern: {}"
-echo ""
-echo "Note: Some settings may require application restart to take effect"
-"#,
-    username,        // 1st placeholder: Target user
-    settings.device_id, // 2nd placeholder: Target device
-    device_pattern,  // 3rd placeholder: Device pattern
-    username,        // 4th placeholder: USER_ID
-    username,        // 5th placeholder: sudo -u
-    username,        // 6th placeholder: CONFIG_DIR
-    device_pattern,  // 7th placeholder: device.name pattern
-    settings.sample_rate,  // 8th placeholder: audio.rate
-    format,          // 9th placeholder: audio.format
-    settings.buffer_size,  // 10th placeholder: api.alsa.period-size
-    settings.buffer_size,  // 11th placeholder: clock.force-quantum
-    settings.sample_rate,  // 12th placeholder: Sample Rate in summary
-    settings.bit_depth,    // 13th placeholder: Bit Depth in summary
-    settings.buffer_size,  // 14th placeholder: Buffer Size in summary
-    settings.device_id,    // 15th placeholder: Target Device in summary
-    device_pattern,        // 16th placeholder: Device Pattern in summary
-);
-    
-    // Write temporary script
-    let script_path = std::env::temp_dir().join("apply_audio_settings.sh");
-    std::fs::write(&script_path, script_content)
-        .map_err(|e| format!("Failed to create settings script: {}", e))?;
-
-    // Make script executable
-    std::fs::set_permissions(&script_path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-        .map_err(|e| format!("Failed to set script permissions: {}", e))?;
-
-    println!("Executing script with pkexec...");
-
-    // Execute with pkexec and capture output
-    let output = Command::new("pkexec")
-        .arg("--disable-internal-agent")
-        .arg("bash")
-        .arg(&script_path)
-        .output()
-        .map_err(|e| format!("Failed to execute settings script: {}", e))?;
-
-    // Clean up
-    let _ = std::fs::remove_file(&script_path);
-
-    if output.status.success() {
-        println!("Script executed successfully!");
-        
-        // Print the output for debugging
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !stdout.is_empty() {
-            println!("Script output:\n{}", stdout);
-        }
-        
-        Ok(())
-    } else {
-        // Capture both stdout and stderr for detailed error information
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        
-        println!("Script failed with exit code: {}", output.status);
-        println!("Script stdout:\n{}", stdout);
-        println!("Script stderr:\n{}", stderr);
-        
-        // Create a detailed error message
-        let mut error_msg = format!("Script failed with exit code: {}", output.status.code().unwrap_or(-1));
-        
-        if !stderr.is_empty() {
-            error_msg.push_str(&format!("\n\nError output:\n{}", stderr));
-        }
-        
-        if !stdout.is_empty() {
-            // Extract the last few lines of stdout for context
-            let lines: Vec<&str> = stdout.lines().collect();
-            let last_lines: Vec<&str> = lines.iter().rev().take(5).rev().copied().collect();
-            if !last_lines.is_empty() {
-                error_msg.push_str(&format!("\n\nLast output:\n{}", last_lines.join("\n")));
-            }
-        }
-        
-        Err(error_msg)
-    }
-}
-
-// Helper function to extract device pattern for WirePlumber matching
-fn extract_device_pattern(device_id: &str) -> String {
-    match device_id {
-        "default" => "alsa.*".to_string(),
-        id if id.starts_with("alsa:") => {
-            let alsa_name = id.trim_start_matches("alsa:");
-            if alsa_name.contains(".") {
-                alsa_name.to_string()
-            } else {
-                format!("alsa_output.{}", alsa_name)
-            }
-        }
-        id if id.starts_with("pipewire:") => {
-            let node_id = id.trim_start_matches("pipewire:");
-            // Use dynamic resolution to get the actual device name
-            match resolve_pipewire_device_name(node_id) {
-                Ok(device_name) => {
-                    println!("✅ Resolved pipewire:{} to device: {}", node_id, device_name);
-                    device_name
-                },
-                Err(e) => {
-                    println!("❌ Failed to resolve pipewire:{}: {}", node_id, e);
-                    // Emergency fallback - try to find the device by description
-                    find_device_by_description(node_id).unwrap_or_else(|| {
-                        format!("alsa_output.{}", node_id) // Last resort fallback
-                    })
-                }
-            }
-        }
-        id if id.starts_with("pulse:") => {
-            let pulse_id = id.trim_start_matches("pulse:");
-            // NEW: Resolve pulse: IDs to actual device names on PipeWire systems
-            match resolve_pulse_device_name(pulse_id) {
-                Ok(device_name) => {
-                    println!("✅ Resolved pulse:{} to device: {}", pulse_id, device_name);
-                    device_name
-                },
-                Err(e) => {
-                    println!("❌ Failed to resolve pulse:{}: {}", pulse_id, e);
-                    // Fallback to old behavior
-                    format!("alsa_output.{}", pulse_id)
-                }
-            }
-        }
-        _ => device_id.to_string(),
-    }
-}
-
-// Helper function to resolve PipeWire node IDs to actual device names
-fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
+// Device Resolution Functions
+pub fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
     let output = Command::new("pw-cli")
         .args(["info", node_id])
         .output()
@@ -668,7 +434,6 @@ fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
     
     let output_str = String::from_utf8_lossy(&output.stdout);
     
-    // Look for node.name in the output
     for line in output_str.lines() {
         if line.contains("node.name") && line.contains('=') {
             if let Some(name_part) = line.split('=').nth(1) {
@@ -683,36 +448,24 @@ fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
     Err(format!("Could not find node.name for PipeWire node {}", node_id))
 }
 
-// NEW: Helper function to resolve PulseAudio device IDs to actual device names
-fn resolve_pulse_device_name(pulse_id: &str) -> Result<String, String> {
-    // Use pactl to get the actual device name
+pub fn resolve_pulse_device_name(pulse_id: &str) -> Result<String, String> {
     let output = Command::new("pactl")
         .args(["list", "sinks", "short"])
         .output()
         .map_err(|e| format!("Failed to query PulseAudio devices: {}", e))?;
     
-    if !output.status.success() {
-        return Err("PulseAudio query failed".to_string());
-    }
-    
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    
-    // Parse the output to find the device with the matching pulse ID
-    for line in output_str.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 && parts[0] == pulse_id {
-            // Return the actual device name (second column)
-            return Ok(parts[1].to_string());
+    if output.status.success() {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[0] == pulse_id {
+                return Ok(parts[1].to_string());
+            }
         }
     }
     
-    // Also check sources (inputs) if not found in sinks
-    let output = Command::new("pactl")
-        .args(["list", "sources", "short"])
-        .output()
-        .map_err(|e| format!("Failed to query PulseAudio sources: {}", e))?;
-    
-    if output.status.success() {
+    // Check sources as fallback
+    if let Ok(output) = Command::new("pactl").args(["list", "sources", "short"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         for line in output_str.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -725,178 +478,65 @@ fn resolve_pulse_device_name(pulse_id: &str) -> Result<String, String> {
     Err(format!("PulseAudio device {} not found", pulse_id))
 }
 
-// Emergency fallback - try to find device by scanning all nodes
-fn find_device_by_description(target_node_id: &str) -> Option<String> {
-    if let Ok(output) = Command::new("pw-cli").args(["list-objects", "Node"]).output() {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let mut current_node_id: Option<String> = None;
-        let mut current_device_name: Option<String> = None;
-        
-        for line in output_str.lines() {
-            if line.contains("id ") && line.contains("type PipeWire:Interface:Node") {
-                if let Some(id_part) = line.split(',').next() {
-                    if let Some(id) = id_part.split(' ').nth(1) {
-                        current_node_id = Some(id.to_string());
-                    }
-                }
-            }
-            
-            if let Some(ref node_id) = current_node_id {
-                if node_id == target_node_id && line.contains("node.name") && line.contains('=') {
-                    if let Some(name_part) = line.split('=').nth(1) {
-                        let name = name_part.trim().trim_matches('"').to_string();
-                        if !name.is_empty() {
-                            return Some(name);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
-    // Try to get current settings from PipeWire
-    let pw_output = Command::new("pw-cli")
-        .args(["info", "0"])
-        .output();
-        
-    if let Ok(output) = pw_output {
-        if output.status.success() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            let mut sample_rate = 48000; // default
-            let mut bit_depth = 24; // default
-            let mut buffer_size = 512; // default
-            
-            println!("=== DEBUG: Raw pw-cli output ===");
-            println!("{}", output_str);
-            println!("=== DEBUG: End raw output ===");
-            
-            // Parse PipeWire output for current settings
-            for line in output_str.lines() {
-                // Look for lines containing the property with asterisk and tab
-                if line.contains("default.clock.rate") && line.contains('=') {
-                    if let Some(rate_str) = line.split('=').nth(1) {
-                        let rate_clean = rate_str.trim().trim_matches('"').trim();
-                        println!("=== DEBUG: Found sample rate line: '{}'", line);
-                        println!("=== DEBUG: Extracted sample rate: '{}'", rate_clean);
-                        if let Ok(rate) = rate_clean.parse::<u32>() {
-                            sample_rate = rate;
-                        }
-                    }
-                }
-                
-                // Look for lines containing the property with asterisk and tab
-                if line.contains("audio.format") && line.contains('=') {
-                    if let Some(format_str) = line.split('=').nth(1) {
-                        let format = format_str.trim().trim_matches('"').trim();
-                        println!("=== DEBUG: Found audio format line: '{}'", line);
-                        println!("=== DEBUG: Extracted audio format: '{}'", format);
-                        bit_depth = match format {
-                            "S16LE" => 16,
-                            "S24LE" => 24,
-                            "S32LE" => 32,
-                            _ => 24,
-                        };
-                    }
-                }
-                
-                // Look for lines containing the property with asterisk and tab
-                if line.contains("default.clock.quantum") && line.contains('=') && !line.contains("min-quantum") && !line.contains("max-quantum") && !line.contains("quantum-limit") && !line.contains("quantum-floor") {
-                    if let Some(quantum_str) = line.split('=').nth(1) {
-                        let quantum_clean = quantum_str.trim().trim_matches('"').trim();
-                        println!("=== DEBUG: Found buffer size line: '{}'", line);
-                        println!("=== DEBUG: Extracted buffer size: '{}'", quantum_clean);
-                        if let Ok(quantum) = quantum_clean.parse::<u32>() {
-                            buffer_size = quantum;
-                        }
-                    }
-                }
-            }
-            
-            println!("Detected settings: {}Hz, {}bit, {} samples", 
-                     sample_rate, bit_depth, buffer_size);
-            
-            return Ok(AudioSettings::new(sample_rate, bit_depth, buffer_size, "default".to_string()));
-        }
-    }
-    
-    // Fallback: Try to get settings from pactl
-    let pactl_output = Command::new("pactl")
-        .args(["info"])
-        .output();
-        
-    if let Ok(output) = pactl_output {
-        if output.status.success() {
-            // For PulseAudio, we might not get detailed format info
-            // Use reasonable defaults
-            return Ok(AudioSettings::new(48000, 24, 512, "default".to_string()));
-        }
-    }
-    
-    // Final fallback
-    Ok(AudioSettings::new(48000, 24, 512, "default".to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_audio_settings_creation() {
-        let settings = AudioSettings::new(48000, 24, 512, "default".to_string());
-        assert_eq!(settings.sample_rate, 48000);
-        assert_eq!(settings.bit_depth, 24);
-        assert_eq!(settings.buffer_size, 512);
-        assert_eq!(settings.device_id, "default");
+    fn test_audio_settings_validation() {
+        let valid = AudioSettings::new(48000, 24, 512, "default".to_string());
+        assert!(valid.validate().is_ok());
+
+        let invalid_rate = AudioSettings::new(12345, 24, 512, "default".to_string());
+        assert!(invalid_rate.validate().is_err());
+
+        let invalid_depth = AudioSettings::new(48000, 8, 512, "default".to_string());
+        assert!(invalid_depth.validate().is_err());
     }
 
     #[test]
-    fn test_audio_settings_default_values() {
-        let settings = AudioSettings::new(44100, 16, 1024, "alsa:default".to_string());
-        assert_ne!(settings.sample_rate, 48000);
-        assert_ne!(settings.bit_depth, 24);
-        assert_ne!(settings.buffer_size, 512);
-        assert_eq!(settings.device_id, "alsa:default");
+    fn test_device_id_validation() {
+        assert!(is_valid_device_id("default"));
+        assert!(is_valid_device_id("alsa:device1"));
+        assert!(is_valid_device_id("pipewire:123"));
+        assert!(is_valid_device_id("pulse:0"));
+        assert!(!is_valid_device_id(""));
+        assert!(!is_valid_device_id("invalid device"));
     }
 
     #[test]
-    fn test_format_selection() {
-        let test_cases = vec![
-            (16, "S16LE"),
-            (24, "S24LE"),
-            (32, "S32LE"),
-            (8, "S24LE"),  // Default case
-        ];
+    fn test_audio_format_selection() {
+        let settings_16 = AudioSettings::new(48000, 16, 512, "default".to_string());
+        assert_eq!(settings_16.get_audio_format().unwrap(), "S16LE");
 
-        for (bit_depth, expected_format) in test_cases {
-            let format = match bit_depth {
-                16 => "S16LE",
-                24 => "S24LE", 
-                32 => "S32LE",
-                _ => "S24LE",
-            };
-            assert_eq!(format, expected_format);
-        }
+        let settings_24 = AudioSettings::new(48000, 24, 512, "default".to_string());
+        assert_eq!(settings_24.get_audio_format().unwrap(), "S24LE");
+
+        let settings_32 = AudioSettings::new(48000, 32, 512, "default".to_string());
+        assert_eq!(settings_32.get_audio_format().unwrap(), "S32LE");
+
+        let settings_invalid = AudioSettings::new(48000, 8, 512, "default".to_string());
+        assert!(settings_invalid.get_audio_format().is_err());
     }
 
     #[test]
-    fn test_detect_audio_device_returns_result() {
-        // This tests that the function at least compiles and returns a Result
-        let result = detect_audio_device();
-        assert!(result.is_ok() || result.is_err());
-    }
+    fn test_device_type_classification() {
+        let mut device = AudioDevice {
+            name: "test".to_string(),
+            description: "test".to_string(),
+            id: "test".to_string(),
+            device_type: DeviceType::Unknown,
+            available: true,
+        };
 
-    #[test]
-    fn test_audio_settings_serialization() {
-        let settings = AudioSettings::new(192000, 32, 2048, "pipewire:123".to_string());
+        assert!(matches!(classify_device_type("Audio/Source", &device), DeviceType::Input));
+        assert!(matches!(classify_device_type("Audio/Sink", &device), DeviceType::Output));
+        assert!(matches!(classify_device_type("Audio/Duplex", &device), DeviceType::Duplex));
         
-        // Test that settings can be used in string formatting
-        let description = format!("{:?}", settings);
-        assert!(description.contains("192000"));
-        assert!(description.contains("32"));
-        assert!(description.contains("2048"));
-        assert!(description.contains("pipewire:123"));
+        device.name = "input_device".to_string();
+        assert!(matches!(classify_device_type("Audio", &device), DeviceType::Input));
+        
+        device.name = "output_device".to_string();
+        assert!(matches!(classify_device_type("Audio", &device), DeviceType::Output));
     }
 }

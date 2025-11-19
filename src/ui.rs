@@ -20,13 +20,13 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use crate::audio::{
-    AudioSettings, AudioDevice, 
-    apply_audio_settings_with_auth_blocking, 
+    AudioSettings, AudioDevice,  
     detect_audio_device, 
     detect_all_audio_devices,
     detect_current_audio_settings,
     DeviceType
 };
+use crate::config::apply_audio_settings_with_auth_blocking;
 
 pub struct AudioApp {
     pub window: ApplicationWindow,

@@ -5,7 +5,7 @@
  * Under MIT License
  * Feel free to share and modify
  *
- * Audio configuration tool for Linux PipeWire/ALSA systems (Jack in mind)
+ * Utility functions and objects
  */
 
 // Utility functions will go here in future
