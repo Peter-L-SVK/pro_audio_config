@@ -205,7 +205,7 @@ For support and questions:
 ## Roadmap
 
 - [ ] Package manager support
-- [ ] Setting all available devices in one session
+- [x] Setting all available devices in one session
 - [ ] Additional audio backends (JACK)
 - [ ] Preset configurations
 - [ ] Advanced audio routing
