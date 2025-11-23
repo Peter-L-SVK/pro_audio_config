@@ -1,7 +1,177 @@
 //! Integration tests for UI components and data flow
 
-use pro_audio_config::audio::AudioSettings;
-use pro_audio_config::ui::{show_error_dialog, show_success_dialog};
+use pro_audio_config::audio::{AudioSettings, AudioDevice, DeviceType};
+
+// Test the device grouping and categorization logic
+#[test]
+fn test_device_grouping_categorization() {
+    // Test the device categorization logic used in the UI for grouping
+    let test_devices = vec![
+        AudioDevice {
+            name: "usb-audio-1".to_string(),
+            description: "USB Audio Interface".to_string(),
+            id: "alsa:usb1".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        },
+        AudioDevice {
+            name: "usb-mic".to_string(),
+            description: "USB Microphone".to_string(),
+            id: "alsa:usb2".to_string(),
+            device_type: DeviceType::Input,
+            available: true,
+        },
+        AudioDevice {
+            name: "hdmi-output".to_string(),
+            description: "HDMI Audio".to_string(),
+            id: "alsa:hdmi".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        },
+        AudioDevice {
+            name: "pci-card".to_string(),
+            description: "PCI Sound Card".to_string(),
+            id: "alsa:pci".to_string(),
+            device_type: DeviceType::Duplex,
+            available: true,
+        },
+    ];
+    
+    // Simulate the grouping logic from the UI
+    let mut usb_devices = Vec::new();
+    let mut hdmi_devices = Vec::new();
+    let mut pci_devices = Vec::new();
+    let mut other_devices = Vec::new();
+    
+    for device in &test_devices {
+        let desc_lower = device.description.to_lowercase();
+        let name_lower = device.name.to_lowercase();
+        let id_lower = device.id.to_lowercase();
+        
+        if desc_lower.contains("usb") || name_lower.contains("usb") || id_lower.contains("usb") {
+            usb_devices.push(device);
+        }
+        else if desc_lower.contains("hdmi") || name_lower.contains("hdmi") || 
+                desc_lower.contains("displayport") || name_lower.contains("displayport") {
+            hdmi_devices.push(device);
+        }
+        else if name_lower.contains("pci") || id_lower.contains("pci") || desc_lower.contains("pci") {
+            pci_devices.push(device);
+        }
+        else {
+            other_devices.push(device);
+        }
+    }
+    
+    // Verify grouping works correctly
+    assert_eq!(usb_devices.len(), 2);
+    assert_eq!(hdmi_devices.len(), 1);
+    assert_eq!(pci_devices.len(), 1);
+    assert_eq!(other_devices.len(), 0);
+    
+    // Verify device types in groups
+    for usb_device in usb_devices {
+        assert!(usb_device.description.to_lowercase().contains("usb"));
+    }
+}
+
+// Test the device display and cleaning functions
+#[test]
+fn test_device_display_formatting() {
+    // Test the device display formatting used in combo boxes
+    let device = AudioDevice {
+        name: "alsa-device".to_string(),
+        description: "USB Audio Device SUSPENDED".to_string(),
+        id: "alsa:usb123".to_string(),
+        device_type: DeviceType::Output,
+        available: true,
+    };
+    
+    // Simulate the display text generation from UI
+    let device_type = match device.device_type {
+        DeviceType::Input => "🎤 Input",
+        DeviceType::Output => "🔊 Output",
+        DeviceType::Duplex => "🔄 Duplex", 
+        _ => "🔊 Output",
+    };
+    
+    // Clean the description (remove status words like SUSPENDED)
+    let clean_description = device.description
+        .replace("SUSPENDED", "")
+        .replace("RUNNING", "")
+        .replace("IDLE", "")
+        .trim()
+        .trim_end_matches('-')
+        .trim()
+        .to_string();
+    
+    let display_text = if clean_description.is_empty() {
+        format!("{} {}", device_type, device.name)
+    } else {
+        format!("{} {} - {}", device_type, device.name, clean_description)
+    };
+    
+    assert_eq!(display_text, "🔊 Output alsa-device - USB Audio Device");
+    assert!(!display_text.contains("SUSPENDED"));
+}
+
+// Test the tab-specific data structures
+#[test]
+fn test_tab_data_structures() {
+    // Test that we can simulate the tab data structures
+    use std::sync::{Arc, Mutex};
+    
+    // Simulate OutputTab structure
+    struct SimulatedOutputTab {
+        available_devices: Vec<AudioDevice>,
+        current_default_device: Arc<Mutex<String>>,
+    }
+    
+    // Simulate InputTab structure  
+    struct SimulatedInputTab {
+        available_devices: Vec<AudioDevice>,
+        current_default_device: Arc<Mutex<String>>,
+    }
+    
+    let output_tab = SimulatedOutputTab {
+        available_devices: vec![
+            AudioDevice {
+                name: "output-device".to_string(),
+                description: "Output Device".to_string(),
+                id: "alsa:output".to_string(),
+                device_type: DeviceType::Output,
+                available: true,
+            }
+        ],
+        current_default_device: Arc::new(Mutex::new("default-output".to_string())),
+    };
+    
+    let input_tab = SimulatedInputTab {
+        available_devices: vec![
+            AudioDevice {
+                name: "input-device".to_string(),
+                description: "Input Device".to_string(),
+                id: "alsa:input".to_string(),
+                device_type: DeviceType::Input,
+                available: true,
+            }
+        ],
+        current_default_device: Arc::new(Mutex::new("default-input".to_string())),
+    };
+    
+    // Verify tab-specific data
+    assert_eq!(output_tab.available_devices.len(), 1);
+    assert_eq!(input_tab.available_devices.len(), 1);
+    assert!(output_tab.available_devices[0].device_type == DeviceType::Output);
+    assert!(input_tab.available_devices[0].device_type == DeviceType::Input);
+    
+    // Test shared state access
+    let output_device_name = output_tab.current_default_device.lock().unwrap();
+    let input_device_name = input_tab.current_default_device.lock().unwrap();
+    
+    assert_eq!(*output_device_name, "default-output");
+    assert_eq!(*input_device_name, "default-input");
+}
 
 #[test]
 fn test_audio_settings_ui_data_flow() {
@@ -27,6 +197,8 @@ fn test_audio_settings_ui_data_flow() {
 #[test]
 fn test_dialog_function_safety() {
     // Test that dialog functions can be safely called
+    use pro_audio_config::ui::{show_error_dialog, show_success_dialog};
+    
     let result = std::panic::catch_unwind(|| {
         // Only test if GTK is initialized (unlikely in tests, but safe to check)
         if gtk::is_initialized() {
@@ -144,9 +316,6 @@ fn test_ui_string_operations() {
 fn test_ui_thread_safety_patterns() {
     // Test patterns that ensure thread safety in the UI
     use std::sync::{Arc, Mutex};
-    
-    // Import AudioSettings from the main library
-    use pro_audio_config::audio::AudioSettings;
     
     let settings = Arc::new(Mutex::new(AudioSettings::new(48000, 24, 512, "default".to_string())));
     

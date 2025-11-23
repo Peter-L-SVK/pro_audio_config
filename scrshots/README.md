@@ -1,12 +1,15 @@
 # Gallery
 
 ![Running the program](scr1.png)  
-*(After start)*  
+*(Default output selected)*  
 
-![Running the program](scr2.png)  
+![Inputs](scr2.png)  
+*(Default input selected)*  
+
+![About](scr3.png)  
 *(Help -> About)*  
 
-![Running the program](scr3.png)  
+![License](scr4.png)  
 *(License)*  
 
 ---
