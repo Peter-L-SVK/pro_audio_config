@@ -57,7 +57,7 @@ As audio companies improve their Linux driver support and PipeWire continues to 
 - pkexec (for privilege escalation)
 
 ### Rust Toolchain
-- Rust 1.70 or newer
+- Rust 1.85.0 or newer
 - Cargo
 
 ### GTK Development Libraries

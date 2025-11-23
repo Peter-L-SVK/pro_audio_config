@@ -2,7 +2,7 @@
 name = "pro-audio-config"
 version = "1.5.0"
 authors = ["Peter Leukanič"]
-edition = "2021"
+edition = "2024"
 description = "A professional audio configuration tool for Linux systems"
 license = "MIT"
 repository = "https://github.com/Peter-L-SVK/pro-audio-config"
