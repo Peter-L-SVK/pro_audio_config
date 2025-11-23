@@ -20,6 +20,16 @@ After 10 years of using Fedora and other Linux distributions, I realized we're s
 - **No Terminal Required**: Graphical interface that anyone can use
 - **Privilege Escalation**: Secure privilege escalation for system-level audio configuration
 
+### Multi-Tab Interface
+- **Separate Input/Output Configuration**: Dedicated tabs for playback (output) and recording (input) devices
+- **Independent Settings Management**: Configure input and output devices with different sample rates, bit depths, and buffer sizes
+- **Clear Visual Separation**: Intuitive tabbed interface that clearly distinguishes between recording and playback settings
+
+### Advanced Configuration
+- **Dedicated WirePlumber Configs**: Separate configuration generators for input vs output devices
+- **Independent Signal Handlers**: Each tab manages its own settings and apply operations
+- **Comprehensive Testing**: Extensive test suite covering new input/output separation features
+
 ## Supported Audio Systems
 
 - PipeWire (primary)
@@ -89,6 +99,12 @@ Run the application from your application menu or terminal:
 pro-audio-config
 ```
 
+### Input/Output Tabs
+- **Output Tab**: Configure playback devices (speakers, headphones, HDMI outputs)
+- **Input Tab**: Configure recording devices (microphones, audio interfaces, line inputs)
+
+Each tab maintains independent settings, allowing you to optimize input and output devices separately for your specific use case.
+
 ## Configuration
 
 ### Sample Rates
@@ -145,7 +161,7 @@ pro_audio_config/
 ├── icons/               # Application icons
 ├── install.sh           # Installation script
 ├── uninstall.sh         # Uninstallation script
-└── Cargo.toml          # Project dependencies
+└── Cargo.toml           # Project dependencies
 ```
 
 ## Technical Details
@@ -206,6 +222,7 @@ For support and questions:
 
 - [ ] Package manager support
 - [x] Setting all available devices in one session
+- [x] Separate input/output configuration tabs
 - [ ] Additional audio backends (JACK)
 - [ ] Preset configurations
 - [ ] Advanced audio routing

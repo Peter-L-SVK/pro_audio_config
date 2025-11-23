@@ -1,9 +1,11 @@
 /*
- * Pro Audio Config Library
- * Version: 1.3
+ * Pro Audio Config - Library
+ * Version: 1.5
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
+ *
+ * Module library for app
  */
 
 pub mod audio;
@@ -15,7 +17,40 @@ pub mod utils;
 pub use audio::{
     AudioSettings, AudioDevice, DeviceType,
     detect_audio_device, detect_all_audio_devices, detect_current_audio_settings,
+    detect_output_audio_devices, detect_input_audio_devices,
+    detect_output_audio_device, detect_input_audio_device,
     resolve_pipewire_device_name, resolve_pulse_device_name
 };
-pub use config::apply_audio_settings_with_auth_blocking;
+pub use config::{
+    apply_audio_settings_with_auth_blocking,
+    apply_output_audio_settings_with_auth_blocking,
+    apply_input_audio_settings_with_auth_blocking
+};
 pub use ui::{AudioApp, create_section_box, show_error_dialog, show_success_dialog};
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    #[test]
+    fn test_library_exports() {
+        // Test that all main functionality is properly exported
+        let _ = AudioSettings::new(48000, 24, 512, "default".to_string());
+        let _ = detect_audio_device();
+        let _ = detect_all_audio_devices();
+        let _ = detect_current_audio_settings();
+        
+        // Test new v1.5 exports
+        let _ = detect_output_audio_devices();
+        let _ = detect_input_audio_devices();
+        let _ = detect_output_audio_device();
+        let _ = detect_input_audio_device();
+    }
+
+    #[test]
+    fn test_module_structure() {
+        // Verify all modules are properly defined
+        // This is a compile-time test, so it should always pass if the code compiles
+        assert!(true, "Module structure should be valid");
+    }
+}

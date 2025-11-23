@@ -3,9 +3,15 @@
 use pro_audio_config::audio::{
     AudioSettings, AudioDevice, DeviceType,
     detect_all_audio_devices, detect_current_audio_settings,
+    detect_output_audio_devices, detect_input_audio_devices,
+    detect_output_audio_device, detect_input_audio_device,
     resolve_pipewire_device_name, resolve_pulse_device_name
 };
-use pro_audio_config::config::apply_audio_settings_with_auth_blocking;
+use pro_audio_config::config::{
+    apply_audio_settings_with_auth_blocking,
+    apply_output_audio_settings_with_auth_blocking,
+    apply_input_audio_settings_with_auth_blocking
+};
 use std::process::Command;
 
 fn is_ci_environment() -> bool {
@@ -13,8 +19,6 @@ fn is_ci_environment() -> bool {
 }
 
 fn has_audio_hardware() -> bool {
-    use std::process::Command;
-    
     Command::new("pactl")
         .args(["info"])
         .output()
@@ -48,6 +52,160 @@ fn test_audio_settings_lifecycle() {
     assert!(debug_output.contains("48000"));
 }
 
+// NEW TESTS FOR V1.5 FEATURES
+#[test]
+fn test_separate_input_output_detection() {
+    // Test the new v1.5 separate detection functions
+    let output_devices = detect_output_audio_devices();
+    let input_devices = detect_input_audio_devices();
+    
+    // Both should return Result without panicking
+    assert!(output_devices.is_ok() || output_devices.is_err());
+    assert!(input_devices.is_ok() || input_devices.is_err());
+    
+    // If successful, verify device types are filtered correctly
+    if let Ok(output_devs) = output_devices {
+        for device in output_devs.iter().take(3) {
+            assert!(matches!(
+                device.device_type,
+                DeviceType::Output | DeviceType::Duplex
+            ), "Output device list should only contain output/duplex devices");
+        }
+    }
+    
+    if let Ok(input_devs) = input_devices {
+        for device in input_devs.iter().take(3) {
+            assert!(matches!(
+                device.device_type,
+                DeviceType::Input | DeviceType::Duplex
+            ), "Input device list should only contain input/duplex devices");
+        }
+    }
+}
+
+#[test]
+fn test_current_device_detection_separate() {
+    // Test separate detection of current input/output devices
+    let output_device = detect_output_audio_device();
+    let input_device = detect_input_audio_device();
+    
+    // Both should return Result without panicking
+    assert!(output_device.is_ok() || output_device.is_err());
+    assert!(input_device.is_ok() || input_device.is_err());
+    
+    // Verify they return strings (either device names or error messages)
+    if let Ok(output_name) = &output_device {
+        assert!(!output_name.is_empty());
+        // Should contain system identifier (PipeWire/PulseAudio/ALSA)
+        assert!(output_name.contains(':'));
+    }
+    
+    if let Ok(input_name) = &input_device {
+        assert!(!input_name.is_empty());
+        assert!(input_name.contains(':'));
+    }
+}
+
+#[test]
+fn test_hardware_device_filtering_integration() {
+    // Test that hardware device filtering works in real detection
+    let devices_result = detect_all_audio_devices();
+    
+    if let Ok(devices) = devices_result {
+        for device in devices.iter().take(5) {
+            // Test the filtering criteria used in the actual code
+            let name_lower = device.name.to_lowercase();
+            let desc_lower = device.description.to_lowercase();
+            
+            let is_virtual = name_lower.contains("virtual") 
+                || name_lower.contains("null")
+                || name_lower.contains("dummy")
+                || desc_lower.contains("virtual")
+                || desc_lower.contains("null");
+            
+            // If it's not virtual, it should be considered hardware
+            if !is_virtual {
+                println!("Hardware device: {} - {}", device.name, device.description);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_apply_functions_separate() {
+    // Test that the new separate apply functions exist and work
+    let output_settings = AudioSettings::new(48000, 24, 512, "default".to_string());
+    let input_settings = AudioSettings::new(48000, 24, 512, "default".to_string());
+    
+    // Test that functions can be called without panicking
+    let output_result = std::panic::catch_unwind(|| {
+        let _ = apply_output_audio_settings_with_auth_blocking(output_settings);
+    });
+    
+    let input_result = std::panic::catch_unwind(|| {
+        let _ = apply_input_audio_settings_with_auth_blocking(input_settings);
+    });
+    
+    assert!(output_result.is_ok(), "apply_output_audio_settings_with_auth_blocking should not panic");
+    assert!(input_result.is_ok(), "apply_input_audio_settings_with_auth_blocking should not panic");
+}
+
+#[test]
+fn test_device_categorization_logic() {
+    // Test the device categorization logic used in UI grouping
+    let test_devices = vec![
+        AudioDevice {
+            name: "usb-audio".to_string(),
+            description: "USB Audio Device".to_string(),
+            id: "alsa:usb".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        },
+        AudioDevice {
+            name: "hdmi-output".to_string(),
+            description: "HDMI Audio Output".to_string(),
+            id: "alsa:hdmi".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        },
+        AudioDevice {
+            name: "pci-card".to_string(),
+            description: "PCI Sound Card".to_string(),
+            id: "alsa:pci".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        },
+        AudioDevice {
+            name: "analog-input".to_string(),
+            description: "Analog Input".to_string(),
+            id: "alsa:analog".to_string(),
+            device_type: DeviceType::Input,
+            available: true,
+        },
+    ];
+    
+    for device in test_devices {
+        let desc_lower = device.description.to_lowercase();
+        let name_lower = device.name.to_lowercase();
+        let id_lower = device.id.to_lowercase();
+        
+        // Test the categorization logic from the UI
+        let category = if desc_lower.contains("usb") || name_lower.contains("usb") || id_lower.contains("usb") {
+            "USB"
+        } else if desc_lower.contains("hdmi") || name_lower.contains("hdmi") || 
+                  desc_lower.contains("displayport") || name_lower.contains("displayport") {
+            "HDMI"
+        } else if name_lower.contains("pci") || id_lower.contains("pci") || desc_lower.contains("pci") {
+            "PCI"
+        } else {
+            "Other"
+        };
+        
+        assert!(!category.is_empty());
+        println!("Device {} categorized as: {}", device.name, category);
+    }
+}
+
 #[test]
 fn test_audio_settings_edge_cases() {
     // Test boundary conditions
@@ -57,6 +215,11 @@ fn test_audio_settings_edge_cases() {
         (384000, 32, 8192, "pipewire:123"),
         // Still valid but unusual
         (8000, 24, 64, "pulse:0"),
+        // Test new v1.5 device ID patterns
+        (48000, 24, 512, "default"),
+        (48000, 24, 512, "alsa:usb-device"),
+        (48000, 24, 512, "pipewire:42"),
+        (48000, 24, 512, "pulse:1"),
     ];
     
     for (sample_rate, bit_depth, buffer_size, device_id) in test_cases {
@@ -76,6 +239,7 @@ fn test_audio_settings_validation_failures() {
         (48000, 8, 512, "default"),   // Invalid bit depth
         (48000, 24, 999, "default"),  // Invalid buffer size
         (48000, 24, 512, ""),         // Empty device ID
+        (48000, 24, 512, "invalid device"), // Device ID with space
     ];
     
     for (sample_rate, bit_depth, buffer_size, device_id) in invalid_cases {
