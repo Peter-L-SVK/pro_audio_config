@@ -5,6 +5,7 @@
  * Under MIT License
  * Feel free to share and modify
  *
+ * Graphical user interface module implementing separate configuration tabs with comprehensive device management.
  */
 
 use gtk::prelude::*;
