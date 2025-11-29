@@ -28,6 +28,12 @@ pub fn is_ci_environment() -> bool {
     std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok()
 }
 
+/// Should we run PipeWire integration tests that probe the system audio stack?
+/// Default: false on CI (the workflow sets RUN_PIPEWIRE_INTEGRATION=false)
+pub fn should_run_pipewire_integration() -> bool {
+    std::env::var("RUN_PIPEWIRE_INTEGRATION").is_ok()
+}
+
 /// Simulate device categorization logic from UI
 pub fn categorize_device(device: &AudioDevice) -> &'static str {
     let desc_lower = device.description.to_lowercase();
