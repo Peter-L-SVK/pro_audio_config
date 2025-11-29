@@ -1,5 +1,7 @@
 # Pro Audio Config
 
+[![Rust CI](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml/badge.svg)](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml)
+
 A professional audio configuration tool for Linux systems that provides a simple graphical interface to manage PipeWire and ALSA audio settings. Finally, an easy way to configure sample rates, bit depths, and buffer sizes without digging through config files.
 
 ## Why This Exists
