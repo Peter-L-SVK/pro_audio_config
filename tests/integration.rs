@@ -14,10 +14,10 @@ fn test_library_integration() {
         apply_output_audio_settings_with_auth_blocking,
         apply_input_audio_settings_with_auth_blocking
     };
-    
+
     let settings = AudioSettings::new(48000, 24, 512, "default".to_string());
     assert!(settings.validate().is_ok());
-    
+
     // Test that the function signature works (without actually running privileged commands)
     let result = std::panic::catch_unwind(|| {
         let _ = apply_output_audio_settings_with_auth_blocking(settings.clone());
@@ -30,7 +30,7 @@ fn test_library_integration() {
 fn test_v15_feature_integration() {
     use pro_audio_config::audio::{
         AudioSettings,
-        detect_output_audio_devices, 
+        detect_output_audio_devices,
         detect_input_audio_devices,
         detect_output_audio_device,
         detect_input_audio_device
@@ -39,21 +39,21 @@ fn test_v15_feature_integration() {
         apply_output_audio_settings_with_auth_blocking,
         apply_input_audio_settings_with_auth_blocking
     };
-    
+
     // Test that all v1.5 functions are properly integrated
     let output_result = detect_output_audio_devices();
     let input_result = detect_input_audio_devices();
-    
+
     assert!(output_result.is_ok() || output_result.is_err());
     assert!(input_result.is_ok() || input_result.is_err());
-    
+
     // Test device detection
     let output_device = detect_output_audio_device();
     let input_device = detect_input_audio_device();
-    
+
     assert!(output_device.is_ok() || output_device.is_err());
     assert!(input_device.is_ok() || input_device.is_err());
-    
+
     // Test apply functions (they should exist and not panic)
     let settings = AudioSettings::new(48000, 24, 512, "default".to_string());
     let output_apply = std::panic::catch_unwind(|| {
@@ -62,7 +62,7 @@ fn test_v15_feature_integration() {
     let input_apply = std::panic::catch_unwind(|| {
         let _ = apply_input_audio_settings_with_auth_blocking(settings);
     });
-    
+
     assert!(output_apply.is_ok());
     assert!(input_apply.is_ok());
 }
@@ -71,7 +71,7 @@ fn test_v15_feature_integration() {
 fn test_device_categorization_integration() {
     // Test the complete device categorization workflow
     use pro_audio_config::audio::{AudioDevice, DeviceType};
-    
+
     let devices = vec![
         AudioDevice {
             name: "usb-audio".to_string(),
@@ -88,7 +88,7 @@ fn test_device_categorization_integration() {
             available: true,
         },
     ];
-    
+
     // Test categorization using the common helper
     for device in &devices {
         let category = categorize_device(device);
@@ -125,7 +125,7 @@ fn test_wireplumber_debug_integration() {
         let handle = std::thread::spawn(|| {
             let _ = pro_audio_config::config::debug_wireplumber_config();
         });
-        
+
         // Use regular join
         if let Err(_) = handle.join() {
             println!("debug_wireplumber_config thread failed (may be expected in test environment)");

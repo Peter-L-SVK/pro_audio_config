@@ -39,10 +39,10 @@ mod integration_tests {
 
     #[cfg(test)]
     pub mod test_utils {
-	
+
 	// Re-export test helpers
     }
-    
+
     #[test]
     fn test_library_exports() {
         // Test that all main functionality is properly exported
@@ -50,7 +50,7 @@ mod integration_tests {
         let _ = detect_audio_device();
         let _ = detect_all_audio_devices();
         let _ = detect_current_audio_settings();
-        
+
         // Test new exports
         let _ = detect_output_audio_devices();
         let _ = detect_input_audio_devices();

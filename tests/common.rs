@@ -39,10 +39,10 @@ pub fn categorize_device(device: &AudioDevice) -> &'static str {
     let desc_lower = device.description.to_lowercase();
     let name_lower = device.name.to_lowercase();
     let id_lower = device.id.to_lowercase();
-    
+
     if desc_lower.contains("usb") || name_lower.contains("usb") || id_lower.contains("usb") {
         "USB"
-    } else if desc_lower.contains("hdmi") || name_lower.contains("hdmi") || 
+    } else if desc_lower.contains("hdmi") || name_lower.contains("hdmi") ||
               desc_lower.contains("displayport") || name_lower.contains("displayport") {
         "HDMI"
     } else if name_lower.contains("pci") || id_lower.contains("pci") || desc_lower.contains("pci") {
