@@ -294,9 +294,9 @@ impl AudioApp {
 
 impl AudioTab {
     fn load_preferences() -> AppPreferences {
-        if let Some(prefs_dir) = directories::ProjectDirs::from("com", "pro-audio-config", "Pro Audio Config") {
+        if let Some(prefs_dir) = directories::ProjectDirs::from("com", "proaudioconfig", "Pro Audio Config") {
             let prefs_path = prefs_dir.config_dir().join("preferences.toml");
-            if let Ok(content) = fs::read_to_string(prefs_path) {
+            if let Ok(content) = fs::read_to_string(&prefs_path) {
                 if let Ok(prefs) = toml::from_str(&content) {
                     return prefs;
                 }
@@ -304,136 +304,152 @@ impl AudioTab {
         }
         AppPreferences::default()
     }
-
+    
     fn save_preferences(prefs: &AppPreferences) -> Result<(), String> {
-        if let Some(prefs_dir) = directories::ProjectDirs::from("com", "pro-audio-config", "Pro Audio Config") {
-            fs::create_dir_all(prefs_dir.config_dir())
+        if let Some(prefs_dir) = directories::ProjectDirs::from("com", "proaudioconfig", "Pro Audio Config") {
+            let config_dir = prefs_dir.config_dir();
+            println!("DEBUG: Saving preferences to: {}", config_dir.display());
+            
+            fs::create_dir_all(config_dir)
                 .map_err(|e| format!("Failed to create config directory: {}", e))?;
             
-            let prefs_path = prefs_dir.config_dir().join("preferences.toml");
+            let prefs_path = config_dir.join("preferences.toml");
+            println!("DEBUG: Preferences file path: {}", prefs_path.display());
+            
             let content = toml::to_string(prefs)
                 .map_err(|e| format!("Failed to serialize preferences: {}", e))?;
             
-            fs::write(prefs_path, content)
+            fs::write(&prefs_path, content)
                 .map_err(|e| format!("Failed to write preferences: {}", e))?;
+                
+            println!("DEBUG: Preferences saved successfully to: {}", prefs_path.display());
         }
         Ok(())
     }
     
     pub fn new(tab_type: TabType) -> Self {
-        let container = GtkBox::new(Orientation::Vertical, 12);
-        container.set_margin_top(12);
-        container.set_margin_bottom(12);
-        container.set_margin_start(12);
-        container.set_margin_end(12);
-
-        // ===== DEVICE SECTION =====
-        let (device_frame, device_box) = create_section_box(tab_type.device_label());
-        
-        let current_device_label = Label::new(Some(&format!("{}: Detecting...", tab_type.current_device_prefix())));
-        current_device_label.set_halign(gtk::Align::Start);
-        current_device_label.set_selectable(true);
-        
-        let device_selection_label = Label::new(Some(&format!("Select {} to Configure:", tab_type.device_label())));
-        device_selection_label.set_halign(gtk::Align::Start);
-        
-        let device_combo = ComboBoxText::new();
-        
-        let selection_info_label = Label::new(Some(&format!("Select an {} device from the dropdown above", tab_type.title().to_lowercase())));
-        selection_info_label.set_halign(gtk::Align::Start);
-        
-        device_box.pack_start(&current_device_label, false, false, 0);
-        device_box.pack_start(&device_selection_label, false, false, 0);
-        device_box.pack_start(&device_combo, false, false, 0);
-        device_box.pack_start(&selection_info_label, false, false, 0);
-
-        // ===== SETTINGS SECTION =====
-        let (settings_frame, settings_box) = create_section_box(tab_type.settings_label());
-        let preferences = Arc::new(Mutex::new(Self::load_preferences()));
-        let system_wide_checkbox = CheckButton::with_label("Apply system-wide (requires admin password)");
-
-        // Set initial state from preferences
-        {
+	let container = GtkBox::new(Orientation::Vertical, 12);
+	container.set_margin_top(12);
+	container.set_margin_bottom(12);
+	container.set_margin_start(12);
+	container.set_margin_end(12);
+	
+	// ===== DEVICE SECTION =====
+	let (device_frame, device_box) = create_section_box(tab_type.device_label());
+	
+	let current_device_label = Label::new(Some(&format!("{}: Detecting...", tab_type.current_device_prefix())));
+	current_device_label.set_halign(gtk::Align::Start);
+	current_device_label.set_selectable(true);
+	
+	let device_selection_label = Label::new(Some(&format!("Select {} to Configure:", tab_type.device_label())));
+	device_selection_label.set_halign(gtk::Align::Start);
+	
+	let device_combo = ComboBoxText::new();
+	
+	let selection_info_label = Label::new(Some(&format!("Select an {} device from the dropdown above", tab_type.title().to_lowercase())));
+	selection_info_label.set_halign(gtk::Align::Start);
+	
+	device_box.pack_start(&current_device_label, false, false, 0);
+	device_box.pack_start(&device_selection_label, false, false, 0);
+	device_box.pack_start(&device_combo, false, false, 0);
+	device_box.pack_start(&selection_info_label, false, false, 0);
+	
+	// ===== SETTINGS SECTION =====
+	let (settings_frame, settings_box) = create_section_box(tab_type.settings_label());
+	let preferences = Arc::new(Mutex::new(Self::load_preferences()));
+	
+	// Create the system-wide checkbox HERE and use it throughout
+	let system_wide_checkbox = CheckButton::with_label("Apply system-wide (requires admin password)");
+	
+	// DEBUG: Print loaded preferences
+	{
+            let prefs = preferences.lock().unwrap();
+            println!("DEBUG: Loaded preferences - system_wide_config: {}", prefs.system_wide_config);
+	}
+	
+	// Set initial state from preferences
+	{
             let prefs = preferences.lock().unwrap();
             system_wide_checkbox.set_active(prefs.system_wide_config);
-        }
-        
-        // Sample Rate Selection
-        let sample_rate_label = Label::new(Some("Sample Rate:"));
-        sample_rate_label.set_halign(gtk::Align::Start);
-        
-        let sample_rate_combo = ComboBoxText::new();
-        Self::populate_combo_box(&sample_rate_combo, SAMPLE_RATES);
-        
-        // Set default values based on tab type
-        if matches!(tab_type, TabType::Output) {
+            println!("DEBUG: Setting checkbox to: {}", prefs.system_wide_config);
+	}
+	
+	// Sample Rate Selection
+	let sample_rate_label = Label::new(Some("Sample Rate:"));
+	sample_rate_label.set_halign(gtk::Align::Start);
+	
+	let sample_rate_combo = ComboBoxText::new();
+	Self::populate_combo_box(&sample_rate_combo, SAMPLE_RATES);
+	
+	// Set default values based on tab type
+	if matches!(tab_type, TabType::Output) {
             sample_rate_combo.set_active_id(Some("48000"));
-        }
-
-        // Bit Depth Selection
-        let bit_depth_label = Label::new(Some("Bit Depth:"));
-        bit_depth_label.set_halign(gtk::Align::Start);
-        
-        let bit_depth_combo = ComboBoxText::new();
-        Self::populate_combo_box(&bit_depth_combo, BIT_DEPTHS);
-        
-        if matches!(tab_type, TabType::Output) {
+	}
+	
+	// Bit Depth Selection
+	let bit_depth_label = Label::new(Some("Bit Depth:"));
+	bit_depth_label.set_halign(gtk::Align::Start);
+	
+	let bit_depth_combo = ComboBoxText::new();
+	Self::populate_combo_box(&bit_depth_combo, BIT_DEPTHS);
+	
+	if matches!(tab_type, TabType::Output) {
             bit_depth_combo.set_active_id(Some("24"));
-        }
-
-        // Buffer Size Selection
-        let buffer_size_label = Label::new(Some("Buffer Size:"));
-        buffer_size_label.set_halign(gtk::Align::Start);
-        
-        let buffer_size_combo = ComboBoxText::new();
-        Self::populate_combo_box(&buffer_size_combo, BUFFER_SIZES);
-        
-        if matches!(tab_type, TabType::Output) {
+	}
+	
+	// Buffer Size Selection
+	let buffer_size_label = Label::new(Some("Buffer Size:"));
+	buffer_size_label.set_halign(gtk::Align::Start);
+	
+	let buffer_size_combo = ComboBoxText::new();
+	Self::populate_combo_box(&buffer_size_combo, BUFFER_SIZES);
+	
+	if matches!(tab_type, TabType::Output) {
             buffer_size_combo.set_active_id(Some("512"));
-        }
-
-        // Add settings to settings box
-        settings_box.pack_start(&sample_rate_label, false, false, 0);
-        settings_box.pack_start(&sample_rate_combo, false, false, 0);
-        settings_box.pack_start(&bit_depth_label, false, false, 0);
-        settings_box.pack_start(&bit_depth_combo, false, false, 0);
-        settings_box.pack_start(&buffer_size_label, false, false, 0);
-        settings_box.pack_start(&buffer_size_combo, false, false, 0);
-
-        // ===== ACTIONS SECTION =====
-        let (actions_frame, actions_box) = create_section_box(tab_type.actions_label());
-        
-        let status_label = Label::new(Some(&format!("Ready to configure {} audio settings", tab_type.title().to_lowercase())));
-        status_label.set_halign(gtk::Align::Start);
-        
-        let apply_button = Button::with_label(tab_type.apply_button_label());
-
-        let info_label = Label::new(Some(&format!("Note: Administrator privileges will be requested to apply system {} audio settings", tab_type.title().to_lowercase())));
-        info_label.set_line_wrap(true);
-
-        actions_box.pack_start(&status_label, false, false, 0);
-        actions_box.pack_start(&apply_button, false, false, 0);
-        actions_box.pack_start(&info_label, false, false, 0);
-
-        // ===== SYSTEM CONFIG SECTION =====
-        let (system_frame, system_box) = create_section_box("Configuration Scope");
-        
-        let system_wide_checkbox = CheckButton::with_label("Apply system-wide (requires admin password)");
-        let system_info_label = Label::new(Some("System-wide changes affect all users and require authentication"));
-        system_info_label.set_line_wrap(true);
-        
-        system_box.pack_start(&system_wide_checkbox, false, false, 0);
-        system_box.pack_start(&system_info_label, false, false, 0);
-        
-        // Add to container after actions section
-        container.pack_start(&system_frame, false, false, 0);
-        
-        // ===== ASSEMBLE TAB =====
-        container.pack_start(&device_frame, false, false, 0);
-        container.pack_start(&settings_frame, false, false, 0);
-        container.pack_start(&actions_frame, false, false, 0);
-
-        Self {
+	}
+	
+	// Add settings to settings box
+	settings_box.pack_start(&sample_rate_label, false, false, 0);
+	settings_box.pack_start(&sample_rate_combo, false, false, 0);
+	settings_box.pack_start(&bit_depth_label, false, false, 0);
+	settings_box.pack_start(&bit_depth_combo, false, false, 0);
+	settings_box.pack_start(&buffer_size_label, false, false, 0);
+	settings_box.pack_start(&buffer_size_combo, false, false, 0);
+	
+	// ===== ACTIONS SECTION =====
+	let (actions_frame, actions_box) = create_section_box(tab_type.actions_label());
+	
+	let status_label = Label::new(Some(&format!("Ready to configure {} audio settings", tab_type.title().to_lowercase())));
+	status_label.set_halign(gtk::Align::Start);
+	
+	let apply_button = Button::with_label(tab_type.apply_button_label());
+	
+	let info_label = Label::new(Some(&format!("Note: Administrator privileges will be requested to apply system {} audio settings", tab_type.title().to_lowercase())));
+	info_label.set_line_wrap(true);
+	
+	actions_box.pack_start(&status_label, false, false, 0);
+	actions_box.pack_start(&apply_button, false, false, 0);
+	actions_box.pack_start(&info_label, false, false, 0);
+	
+	// ===== SYSTEM CONFIG SECTION =====
+	let (system_frame, system_box) = create_section_box("Configuration Scope");
+	
+	// Use the SAME system_wide_checkbox instance that we created above
+	let system_info_label = Label::new(Some("System-wide changes affect all users and require authentication"));
+	system_info_label.set_line_wrap(true);
+	
+	system_box.pack_start(&system_wide_checkbox, false, false, 0);
+	system_box.pack_start(&system_info_label, false, false, 0);
+	
+	// Add to container after actions section
+	container.pack_start(&system_frame, false, false, 0);
+	
+	// ===== ASSEMBLE TAB =====
+	container.pack_start(&device_frame, false, false, 0);
+	container.pack_start(&settings_frame, false, false, 0);
+	container.pack_start(&actions_frame, false, false, 0);
+	
+	Self {
             container,
             status_label,
             sample_rate_combo,
@@ -445,9 +461,9 @@ impl AudioTab {
             available_devices: Vec::new(),
             current_default_device: Arc::new(Mutex::new(String::new())),
             tab_type,
-            system_wide_checkbox,
+            system_wide_checkbox, // This is now the same instance that's in the UI
             preferences,
-        }
+	}
     }
 
     // Helper function to populate combo boxes from common definitions
@@ -720,16 +736,20 @@ impl AudioTab {
 
         system_wide_checkbox.connect_toggled(move |checkbox| {
             let system_wide = checkbox.is_active();
-    
+
             // Update preferences
             let mut prefs = preferences_clone.lock().unwrap();
             prefs.system_wide_config = system_wide;
-    
+
+            println!("DEBUG: Checkbox toggled - system_wide: {}, saving preferences...", system_wide);
+
             // Save preferences
             if let Err(e) = Self::save_preferences(&prefs) {
                 println!("Warning: Failed to save preferences: {}", e);
+            } else {
+                println!("DEBUG: Preferences saved successfully");
             }
-    
+
             // Update UI feedback
             if system_wide {
                 println!("System-wide configuration enabled");
@@ -748,20 +768,25 @@ impl AudioTab {
             // Clone tab_type for use in this closure
             let tab_type = tab_type_for_apply.clone();
             
-            // Update UI immediately
-            status_label.set_text(&format!("Applying {} settings...", tab_type.title().to_lowercase()));
+            // Get system-wide preference
+            let system_wide = {
+                let prefs = preferences_clone.lock().unwrap();
+                prefs.system_wide_config
+            };
+            
+            // Update UI immediately with appropriate message
+            if system_wide {
+                status_label.set_text(&format!("Applying system-wide {} settings... (May prompt for admin password)", tab_type.title().to_lowercase()));
+            } else {
+                status_label.set_text(&format!("Applying user {} settings...", tab_type.title().to_lowercase()));
+            }
+            
             apply_button.set_sensitive(false);
             
             // Get selected device ID
             let device_id = device_combo.active_id()
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "default".to_string());
-            
-            // Get system-wide preference
-            let system_wide = {
-                let prefs = preferences_clone.lock().unwrap();
-                prefs.system_wide_config
-            };
             
             // Get settings
             let settings = {
