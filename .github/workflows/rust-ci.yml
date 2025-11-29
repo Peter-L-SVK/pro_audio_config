@@ -5,6 +5,12 @@ on:
     branches: [ stage, main ]
   pull_request:
     branches: [ stage, main ]
+  workflow_dispatch:   # allow manual runs (useful to trigger full integration)
+    inputs:
+      run_integration:
+        description: 'Run PipeWire integration tests (requires suitable runner)'
+        required: false
+        default: 'false'
 
 jobs:
   build-and-test:
@@ -19,10 +25,12 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y build-essential pkg-config libglib2.0-dev libgtk-3-dev libasound2-dev libpipewire-0.3-dev pipewire wireplumber
 
-      - name: Set up Rust toolchain
-        uses: actions/setup-rust@v1
+      - name: Set up Rust toolchain (actions-rs/toolchain)
+        uses: actions-rs/toolchain@v1
         with:
-          rust-version: stable
+          toolchain: stable
+          components: rustfmt, clippy
+          override: true
 
       - name: Cache Cargo and target
         uses: actions/cache@v4
@@ -41,9 +49,9 @@ jobs:
       - name: cargo clippy (deny warnings)
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Run tests (PipeWire integration disabled by default)
+      - name: Run tests
         env:
           CI: "true"
           GITHUB_ACTIONS: "true"
-          RUN_PIPEWIRE_INTEGRATION: "false"
+          RUN_PIPEWIRE_INTEGRATION: ${{ github.event.inputs.run_integration || 'false' }}
         run: cargo test --workspace --all-features --verbose
