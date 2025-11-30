@@ -501,7 +501,7 @@ context.modules = [
         settings.sample_rate, settings.buffer_size, settings.sample_rate
     );
 
-    for dir in &config_dirs {
+    if let Some(dir) = config_dirs.iter().next() {
         let config_path = format!("{}/99-pro-audio-high-priority.conf", dir);
 
         // Write file (user path, no privileges needed)
@@ -551,7 +551,7 @@ context.modules = [
         settings.sample_rate, settings.buffer_size, settings.sample_rate
     );
 
-    for dir in &config_dirs {
+    if let Some(dir) = config_dirs.iter().next() {
         let config_path = format!("{}/99-pro-audio-high-priority.conf", dir);
 
         // Write file with privileges for system paths
@@ -611,7 +611,7 @@ context.modules = [
         )]
     };
 
-    for dir in &config_dirs {
+    if let Some(dir) = config_dirs.iter().next() {
         let config_path = format!("{}/99-pro-audio-high-priority.conf", dir);
 
         // Write file with proper privilege handling
@@ -739,7 +739,7 @@ fn create_wireplumber_config_new(
         )]
     };
 
-    for dir in &config_dirs {
+    if let Some(dir) = config_dirs.iter().next() {
         // Create directory if it doesn't exist
         create_dir_all_with_privileges(&dir)?;
 
