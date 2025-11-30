@@ -1,6 +1,6 @@
 # Pro Audio Config <div style="text-align: right">[![Rust CI](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml/badge.svg)](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml) </div>
 
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/leukanic.peter) - Ifyou wish to support me for future updates with some spare change
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/leukanic.peter) - If you wish to support me for future updates with some spare change
 
 A professional audio configuration tool for Linux systems that provides a simple graphical interface to manage PipeWire and ALSA audio settings. Finally, an easy way to configure sample rates, bit depths, and buffer sizes without digging through config files.
 
