@@ -455,7 +455,7 @@ fn test_audio_hardware_detection() {
     // Test the audio-specific helper function
     let has_hardware = has_audio_hardware();
     // This should not panic and return a boolean
-    assert!(has_hardware || !has_hardware); // Always true, just testing it doesn't panic
+    assert!(true); // Test completed without panic
 }
 
 #[test]
