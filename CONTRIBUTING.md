@@ -83,7 +83,7 @@ fix(device-detection): Handle USB audio device hot-plugging [issue #23]
 ## Development Setup
 
 ### Prerequisites
-- Rust 1.70+
+- Rust 1.85+
 - Cargo
 - GTK3 development libraries
 - PipeWire development headers (optional)

@@ -1,6 +1,6 @@
 [package]
 name = "pro_audio_config"
-version = "1.6.0"
+version = "1.7.0"
 authors = ["Peter Leukanič"]
 edition = "2024"
 description = "A professional audio configuration tool for Linux systems"
@@ -9,14 +9,14 @@ repository = "https://github.com/Peter-L-SVK/pro-audio-config"
 readme = "README.md"
 
 [dependencies]
-gtk = "0.18.2"
+gtk = { version = "0.18.2", features = ["v3_24"] }
 gio = "0.21"
-glib = "0.21"
+glib = { version = "0.21", features = ["v2_80"] }
 dirs = "6.0"
+chrono = "0.4.42"
 directories = "6.0"
 whoami = "1.6"
 shellexpand = "3.1"
-async-channel = "2.5"
 toml = "0.9.8"
 serde = { version = "1.0", features = ["derive"] }
 

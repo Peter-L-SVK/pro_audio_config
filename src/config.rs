@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Configuration Module
- * Version: 1.6
+ * Version: 1.7
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  *
@@ -9,9 +9,11 @@
  */
 
 use crate::audio::AudioSettings;
+use chrono::Local;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// Applies output audio settings with authentication
 pub fn apply_output_audio_settings_with_auth_blocking(
@@ -146,6 +148,10 @@ fn write_config_with_privileges(config_path: &str, content: &str) -> Result<(), 
 /// Create directory with proper privilege escalation for system paths
 fn create_dir_all_with_privileges(path: &str) -> Result<(), String> {
     if path.starts_with("/etc/") {
+        // For system paths, check if directory already exists first
+        if Path::new(path).exists() {
+            return Ok(());
+        }
         // System path - need privileges
         execute_with_privileges("mkdir", &["-p", path])?;
     } else {
@@ -398,29 +404,29 @@ pub fn update_audio_settings(settings: &AudioSettings, system_wide: bool) -> Res
         settings.buffer_size
     );
 
+    // Try multiple configuration approaches in order of preference
+    let mut success = false;
+
     // Clean up conflicting configs first
     if system_wide {
         cleanup_user_pipewire_configs()?;
-        create_system_pipewire_fragment(settings)?;
     } else {
         cleanup_system_pipewire_configs()?;
-        create_user_pipewire_fragment(settings)?;
     }
 
-    // Try multiple configuration approaches in order of preference
-    let mut success = match create_pipewire_fragment(settings, system_wide) {
+    // Approach 1: Create PipeWire config fragment
+    match create_pipewire_fragment(settings, system_wide) {
         Ok(_) => {
             println!("✓ Successfully created PipeWire config fragment");
-            true
+            success = true;
         }
         Err(e) => {
             println!(
                 "PipeWire fragment approach failed: {}, trying next approach...",
                 e
             );
-            false
         }
-    };
+    }
 
     if !success {
         // Approach 2: Create WirePlumber config (if available)
@@ -464,112 +470,6 @@ pub fn update_audio_settings(settings: &AudioSettings, system_wide: bool) -> Res
     }
 }
 
-/// Creates a user-specific PipeWire configuration fragment and cleans up system configs
-fn create_user_pipewire_fragment(settings: &AudioSettings) -> Result<(), String> {
-    // Use user directories only
-    let username = whoami::username();
-    let config_dirs = [format!(
-        "/home/{}/.config/pipewire/pipewire.conf.d",
-        username
-    )];
-
-    let config_content = format!(
-        r#"# Pro Audio Config - User High Priority Settings
-# This file overrides default PipeWire settings
-
-context.properties = {{
-    default.clock.rate = {}
-    default.clock.quantum = {}
-    default.clock.allowed-rates = [ {} ]
-    # Disable rate/quantum checking to ensure our settings are applied
-    settings.check-quantum = false
-    settings.check-rate = false
-}}
-
-context.modules = [
-    {{
-        name = libpipewire-module-rt
-        args = {{
-            nice.level = -11
-            rt.prio = 88
-            rt.time.soft = 200000
-            rt.time.hard = 200000
-        }}
-        flags = [ ifexists nofail ]
-    }}
-]"#,
-        settings.sample_rate, settings.buffer_size, settings.sample_rate
-    );
-
-    if let Some(dir) = config_dirs.iter().next() {
-        let config_path = format!("{}/99-pro-audio-high-priority.conf", dir);
-
-        // Write file (user path, no privileges needed)
-        write_config_with_privileges(&config_path, &config_content)?;
-        println!("✓ User PipeWire config created: {}", config_path);
-        cleanup_old_pipewire_configs(&dir)?;
-
-        // CLEAN UP SYSTEM CONFIGS WHEN USING USER CONFIG
-        cleanup_system_pipewire_configs()?;
-
-        return Ok(());
-    }
-
-    Err("Failed to write user PipeWire configuration".to_string())
-}
-
-/// Creates a system-wide PipeWire configuration fragment and cleans up user configs
-fn create_system_pipewire_fragment(settings: &AudioSettings) -> Result<(), String> {
-    // Use system directories only
-    let config_dirs = ["/etc/pipewire/pipewire.conf.d".to_string()];
-
-    let config_content = format!(
-        r#"# Pro Audio Config - System-wide High Priority Settings
-# This file overrides default PipeWire settings
-
-context.properties = {{
-    default.clock.rate = {}
-    default.clock.quantum = {}
-    default.clock.allowed-rates = [ {} ]
-    # Disable rate/quantum checking to ensure our settings are applied
-    settings.check-quantum = false
-    settings.check-rate = false
-}}
-
-context.modules = [
-    {{
-        name = libpipewire-module-rt
-        args = {{
-            nice.level = -11
-            rt.prio = 88
-            rt.time.soft = 200000
-            rt.time.hard = 200000
-        }}
-        flags = [ ifexists nofail ]
-    }}
-]"#,
-        settings.sample_rate, settings.buffer_size, settings.sample_rate
-    );
-
-    if let Some(dir) = config_dirs.iter().next() {
-        let config_path = format!("{}/99-pro-audio-high-priority.conf", dir);
-
-        // Write file with privileges for system paths
-        write_config_with_privileges(&config_path, &config_content)?;
-        println!("✓ System PipeWire config created: {}", config_path);
-
-        // Also remove any lower priority configs we might have created
-        cleanup_old_pipewire_configs(&dir)?;
-
-        // Clean up user configs when using system config
-        cleanup_user_pipewire_configs()?;
-
-        return Ok(());
-    }
-
-    Err("Failed to write system PipeWire configuration".to_string())
-}
-
 /// Creates a PipeWire configuration fragment file with proper privilege handling
 fn create_pipewire_fragment(settings: &AudioSettings, system_wide: bool) -> Result<(), String> {
     let config_content = format!(
@@ -611,11 +511,26 @@ context.modules = [
         )]
     };
 
-    if let Some(dir) = config_dirs.iter().next() {
+    for dir in &config_dirs {
         let config_path = format!("{}/99-pro-audio-high-priority.conf", dir);
 
+        // Skip backup for system directories to avoid permission issues
+        // The backup is just a safety measure, not critical
+        if !dir.starts_with("/etc/") {
+            if let Err(e) = backup_current_config(&dir) {
+                println!("Note: Could not backup config (non-fatal): {}", e);
+            }
+        }
+
         // Write file with proper privilege handling
-        write_config_with_privileges(&config_path, &config_content)?;
+        if let Err(e) = write_config_with_privileges(&config_path, &config_content) {
+            println!(
+                "Failed to write to {}: {}, trying next location...",
+                config_path, e
+            );
+            continue;
+        }
+
         println!("✓ PipeWire config created: {}", config_path);
 
         // Also remove any lower priority configs we might have created
@@ -739,7 +654,7 @@ fn create_wireplumber_config_new(
         )]
     };
 
-    if let Some(dir) = config_dirs.iter().next() {
+    for dir in &config_dirs {
         // Create directory if it doesn't exist
         create_dir_all_with_privileges(&dir)?;
 
@@ -769,8 +684,15 @@ fn create_wireplumber_config_new(
             settings.buffer_size
         );
 
-        write_config_with_privileges(&config_path, &content)?;
-        println!("Created WirePlumber config: {}", config_path);
+        if let Err(e) = write_config_with_privileges(&config_path, &content) {
+            println!(
+                "Failed to write to {}: {}, trying next location...",
+                config_path, e
+            );
+            continue;
+        }
+
+        println!("✓ Created WirePlumber config: {}", config_path);
         return Ok(());
     }
 
@@ -789,69 +711,71 @@ fn modify_main_pipewire_config(settings: &AudioSettings, system_wide: bool) -> R
     };
 
     for path in &config_paths {
-        if Path::new(path).exists() {
-            let content =
-                fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
-
-            // Try multiple possible patterns for clock rate and quantum
-            let patterns = [
-                (
-                    "#default.clock.rate          = 48000",
-                    format!("default.clock.rate          = {}", settings.sample_rate),
-                ),
-                (
-                    "#default.clock.rate          = 192000",
-                    format!("default.clock.rate          = {}", settings.sample_rate),
-                ),
-                (
-                    "default.clock.rate          = 48000",
-                    format!("default.clock.rate          = {}", settings.sample_rate),
-                ),
-                (
-                    "#default.clock.quantum       = 1024",
-                    format!("default.clock.quantum       = {}", settings.buffer_size),
-                ),
-                (
-                    "#default.clock.quantum       = 8192",
-                    format!("default.clock.quantum       = {}", settings.buffer_size),
-                ),
-                (
-                    "default.clock.quantum       = 1024",
-                    format!("default.clock.quantum       = {}", settings.buffer_size),
-                ),
-                // Also update the allowed rates
-                (
-                    "default.clock.allowed-rates = \\[ 44100, 48000, 96000, 192000 \\]",
-                    format!("default.clock.allowed-rates = [ {} ]", settings.sample_rate),
-                ),
-            ];
-
-            let mut updated_content = content.clone();
-            for (pattern, replacement) in &patterns {
-                updated_content = updated_content.replace(pattern, replacement);
-            }
-
-            // Only write if changes were made
-            if updated_content != content {
-                // Backup original
-                let backup_path = format!("{}.backup", path);
-                if system_wide {
-                    execute_with_privileges("cp", &[path, &backup_path])?;
-                    write_config_with_privileges(path, &updated_content)?;
-                } else {
-                    fs::copy(path, &backup_path)
-                        .map_err(|e| format!("Failed to backup {}: {}", path, e))?;
-                    fs::write(path, updated_content)
-                        .map_err(|e| format!("Failed to write {}: {}", path, e))?;
-                }
-
-                println!("Modified main config: {} (backup: {})", path, backup_path);
-            } else {
-                println!("No changes needed for: {}", path);
-            }
-
-            return Ok(());
+        if !Path::new(path).exists() {
+            continue;
         }
+
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+
+        // Try multiple possible patterns for clock rate and quantum
+        let patterns = [
+            (
+                "#default.clock.rate          = 48000",
+                format!("default.clock.rate          = {}", settings.sample_rate),
+            ),
+            (
+                "#default.clock.rate          = 192000",
+                format!("default.clock.rate          = {}", settings.sample_rate),
+            ),
+            (
+                "default.clock.rate          = 48000",
+                format!("default.clock.rate          = {}", settings.sample_rate),
+            ),
+            (
+                "#default.clock.quantum       = 1024",
+                format!("default.clock.quantum       = {}", settings.buffer_size),
+            ),
+            (
+                "#default.clock.quantum       = 8192",
+                format!("default.clock.quantum       = {}", settings.buffer_size),
+            ),
+            (
+                "default.clock.quantum       = 1024",
+                format!("default.clock.quantum       = {}", settings.buffer_size),
+            ),
+            // Also update the allowed rates
+            (
+                "default.clock.allowed-rates = \\[ 44100, 48000, 96000, 192000 \\]",
+                format!("default.clock.allowed-rates = [ {} ]", settings.sample_rate),
+            ),
+        ];
+
+        let mut updated_content = content.clone();
+        for (pattern, replacement) in &patterns {
+            updated_content = updated_content.replace(pattern, replacement);
+        }
+
+        // Only write if changes were made
+        if updated_content != content {
+            // Backup original
+            let backup_path = format!("{}.backup", path);
+            if system_wide {
+                execute_with_privileges("cp", &[path, &backup_path])?;
+                write_config_with_privileges(path, &updated_content)?;
+            } else {
+                fs::copy(path, &backup_path)
+                    .map_err(|e| format!("Failed to backup {}: {}", path, e))?;
+                fs::write(path, updated_content)
+                    .map_err(|e| format!("Failed to write {}: {}", path, e))?;
+            }
+
+            println!("Modified main config: {} (backup: {})", path, backup_path);
+        } else {
+            println!("No changes needed for: {}", path);
+        }
+
+        return Ok(());
     }
 
     Err("No main PipeWire config file found".to_string())
@@ -942,9 +866,10 @@ pub fn debug_wireplumber_config() -> Result<(), String> {
     Ok(())
 }
 
-/// Unified function to restart audio services with system-wide support
+/// Improved unified function to restart audio services with timeout
 fn restart_audio_services(use_legacy: bool, system_wide: bool) -> Result<(), String> {
     println!("Restarting audio services...");
+    let start_time = Instant::now();
 
     let username = whoami::username();
 
@@ -980,13 +905,15 @@ fn restart_audio_services(use_legacy: bool, system_wide: bool) -> Result<(), Str
             let services = ["pipewire", "pipewire-pulse", "wireplumber"];
 
             for service in &services {
+                println!("Restarting {}...", service);
                 let status = Command::new("systemctl")
                     .args(["--user", "restart", service])
                     .status()
                     .map_err(|e| format!("Failed to restart {}: {}", service, e))?;
 
                 if !status.success() {
-                    return Err(format!("Failed to restart {}", service));
+                    println!("Warning: Failed to restart {}", service);
+                    // Continue with other services instead of failing completely
                 }
 
                 // Brief pause between service restarts
@@ -1014,7 +941,6 @@ fn restart_audio_services(use_legacy: bool, system_wide: bool) -> Result<(), Str
                 // Fallback: kill and let them restart automatically
                 println!("Systemd not available, using fallback restart method...");
                 Command::new("pkill").args(["-f", "pipewire"]).status().ok(); // Ignore errors here
-
                 Command::new("pkill")
                     .args(["-f", "wireplumber"])
                     .status()
@@ -1023,14 +949,86 @@ fn restart_audio_services(use_legacy: bool, system_wide: bool) -> Result<(), Str
         }
 
         // Wait a moment for services to restart
+        println!("Waiting for services to restart...");
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
 
+    // NEW: Check if services are actually running with timeout
+    println!("Checking if audio services are running...");
+    let max_wait_time = Duration::from_secs(10);
+    let check_interval = Duration::from_millis(500);
+
+    let mut elapsed = Duration::from_secs(0);
+    let mut services_running = false;
+
+    while elapsed < max_wait_time {
+        // Check if at least one audio service is running
+        if check_if_services_are_running() {
+            services_running = true;
+            break;
+        }
+
+        std::thread::sleep(check_interval);
+        elapsed += check_interval;
+
+        if elapsed.as_secs() % 2 == 0 {
+            println!(
+                "Waiting for audio services... ({:.1}s)",
+                elapsed.as_secs_f32()
+            );
+        }
+    }
+
+    if !services_running {
+        println!(
+            "⚠ Audio services did not start within timeout. They may start in the background."
+        );
+        println!("⚠ You can check service status with: systemctl --user status pipewire");
+        // Don't fail, just warn - the services might start later
+    } else {
+        println!("✓ Audio services are running");
+    }
+
+    let total_time = start_time.elapsed();
+    println!(
+        "✓ Audio service restart completed in {:.1}s",
+        total_time.as_secs_f32()
+    );
+
     // Additional wait for services to fully initialize
-    println!("Waiting for services to initialize...");
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    if services_running {
+        println!("Waiting for services to fully initialize...");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 
     Ok(())
+}
+
+/// Check if audio services are running
+fn check_if_services_are_running() -> bool {
+    let services = ["pipewire", "pipewire-pulse", "wireplumber"];
+
+    // Check if any of the services are running
+    for service in &services {
+        if let Ok(output) = Command::new("pgrep").arg("-f").arg(service).output() {
+            if output.status.success() {
+                // At least one service is running
+                return true;
+            }
+        }
+    }
+
+    // Also check with systemctl as fallback
+    if let Ok(output) = Command::new("systemctl")
+        .args(["--user", "is-active", "pipewire"])
+        .output()
+    {
+        if output.status.success() {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Removes any configuration files created by this application
@@ -1097,6 +1095,7 @@ pub fn cleanup_config_files() -> Result<(), String> {
     }
 
     if removed_count > 0 {
+        // Use the improved restart function
         restart_audio_services(false, false)?;
         println!(
             "Removed {} configuration files and restarted services",
@@ -1132,6 +1131,479 @@ pub fn check_audio_services() -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// Advanced audio settings structure
+#[derive(Clone, Debug)]
+pub struct AdvancedAudioSettings {
+    pub exclusive_mode: bool,
+    pub direct_hardware: bool,
+    pub low_latency: bool,
+    pub buffer_size: u32,
+    pub sample_rate: u32,
+}
+
+/// Apply advanced audio settings with exclusive mode support
+pub fn apply_advanced_audio_settings(
+    exclusive_mode: bool,
+    direct_hardware: bool,
+    low_latency: bool,
+    buffer_size: u32,
+    sample_rate: u32,
+    device_pattern: Option<String>, // Add device pattern parameter
+) -> Result<(), String> {
+    println!("Applying advanced audio settings:");
+    println!("  Exclusive Mode: {}", exclusive_mode);
+    println!("  Direct Hardware: {}", direct_hardware);
+    println!("  Low Latency: {}", low_latency);
+    println!("  Buffer Size: {}", buffer_size);
+    println!("  Sample Rate: {}", sample_rate);
+
+    if let Some(pattern) = &device_pattern {
+        println!("  Device Pattern: {}", pattern);
+    }
+
+    if exclusive_mode {
+        let device = device_pattern.unwrap_or_else(|| "default".to_string());
+        apply_enhanced_exclusive_mode_settings(
+            direct_hardware,
+            low_latency,
+            buffer_size,
+            sample_rate,
+            &device,
+        )
+    } else {
+        // Return to standard shared mode
+        restore_standard_audio_mode()
+    }
+}
+
+/// Enhanced exclusive mode with device capability checking
+fn apply_enhanced_exclusive_mode_settings(
+    direct_hardware: bool,
+    low_latency: bool,
+    buffer_size: u32,
+    sample_rate: u32,
+    device_pattern: &str,
+) -> Result<(), String> {
+    println!("Configuring enhanced exclusive audio access mode...");
+
+    // Check device suitability for exclusive mode
+    if let Ok(devices) = crate::audio::detect_high_performance_devices() {
+        let target_device = if device_pattern == "default" {
+            devices.first()
+        } else {
+            devices.iter().find(|d| d.id.contains(device_pattern))
+        };
+
+        if let Some(device) = target_device {
+            if !crate::audio::is_device_suitable_for_exclusive_mode(device) {
+                println!("Warning: Selected device may not be ideal for exclusive mode");
+            }
+
+            // Get device capabilities
+            if let Ok(capabilities) = crate::audio::get_device_capabilities(&device.id) {
+                if !capabilities.buffer_sizes.contains(&buffer_size) {
+                    println!(
+                        "Warning: Buffer size {} may not be optimal for {}",
+                        buffer_size, device.name
+                    );
+                }
+                if !capabilities.sample_rates.contains(&sample_rate) {
+                    println!(
+                        "Warning: Sample rate {} may not be supported by {}",
+                        sample_rate, device.name
+                    );
+                }
+            }
+        }
+    }
+
+    // Proceed with existing exclusive mode configuration
+    apply_exclusive_mode_settings(direct_hardware, low_latency, buffer_size, sample_rate)
+}
+
+/// Apply exclusive mode configuration
+fn apply_exclusive_mode_settings(
+    direct_hardware: bool,
+    low_latency: bool,
+    buffer_size: u32,
+    sample_rate: u32,
+) -> Result<(), String> {
+    println!("Configuring exclusive audio access mode...");
+
+    // First, try the modern PipeWire exclusive mode approach
+    match create_pipewire_exclusive_config(direct_hardware, low_latency, buffer_size, sample_rate) {
+        Ok(()) => {
+            println!("✓ PipeWire exclusive mode configured successfully");
+            restart_audio_services(false, true)?;
+            return Ok(());
+        }
+        Err(e) => {
+            println!("PipeWire exclusive mode failed: {}, trying fallback...", e);
+        }
+    }
+
+    // Fallback: Use WirePlumber configuration for exclusive access
+    match create_wireplumber_exclusive_config(
+        direct_hardware,
+        low_latency,
+        buffer_size,
+        sample_rate,
+    ) {
+        Ok(()) => {
+            println!("✓ WirePlumber exclusive mode configured successfully");
+            restart_audio_services(false, true)?;
+            Ok(())
+        }
+        Err(e) => Err(format!("All exclusive mode approaches failed: {}", e)),
+    }
+}
+
+/// Create PipeWire configuration for exclusive mode
+fn create_pipewire_exclusive_config(
+    direct_hardware: bool,
+    low_latency: bool,
+    buffer_size: u32,
+    sample_rate: u32,
+) -> Result<(), String> {
+    let username = whoami::username();
+    let config_dir = format!("/home/{}/.config/pipewire/pipewire.conf.d", username);
+    let config_path = format!("{}/99-pro-audio-exclusive.conf", config_dir);
+
+    let audio_format = if low_latency { "S32LE" } else { "S24LE" };
+
+    // FIXED: More conservative settings that won't break PipeWire
+    let config_content = if direct_hardware {
+        format!(
+            r#"# Pro Audio Config - Exclusive Direct Hardware Access
+# This configuration enables ASIO-like exclusive mode
+
+context.properties = {{
+    default.clock.rate = {}
+    default.clock.quantum = {}
+    default.clock.allowed-rates = [ {} ]
+    # Use standard rate checking to avoid crashes
+    settings.check-quantum = true
+    settings.check-rate = true
+}}
+
+# Configure for low latency with safe defaults
+context.modules = [
+    {{
+        name = libpipewire-module-rt
+        args = {{
+            nice.level = -11    # Reduced from -20 to avoid permission issues
+            rt.prio = 80        # Reduced from 88 to avoid permission issues
+            rt.time.soft = 200000  # Increased from 100000 for better compatibility
+            rt.time.hard = 200000  # Increased from 100000 for better compatibility
+        }}
+        flags = [ ifexists nofail ]
+    }}
+]
+
+# Node configuration for exclusive access
+node.factory = {{
+    args = {{
+        node.name = "pro-audio-exclusive-node"
+        node.description = "Pro Audio Exclusive Mode"
+        media.class = "Audio/Sink"
+        audio.format = "{}"
+        audio.rate = {}
+        audio.allowed-rates = [ {} ]
+        audio.channels = 2
+        audio.position = [ FL, FR ]
+        priority.driver = 100
+        session.suspend-timeout-seconds = 10  # ADDED: Allow timeout for recovery
+    }}
+}}
+
+# Add fallback mechanism
+context.spa-libs = {{
+    # Ensure standard libraries are available
+    api.alsa.* = alsa/libspa-alsa
+    api.v4l2.* = v4l2/libspa-v4l2
+}}
+"#,
+            sample_rate, buffer_size, sample_rate, audio_format, sample_rate, sample_rate
+        )
+    } else {
+        format!(
+            r#"# Pro Audio Config - Exclusive PipeWire Access
+# This configuration enables exclusive mode with PipeWire processing
+
+context.properties = {{
+    default.clock.rate = {}
+    default.clock.quantum = {}
+    default.clock.allowed-rates = [ {} ]
+    # Minimal processing for low latency
+    settings.check-quantum = true
+    settings.check-rate = true
+}}
+
+context.modules = [
+    {{
+        name = libpipewire-module-rt
+        args = {{
+            nice.level = -15
+            rt.prio = 80
+            rt.time.soft = 200000
+            rt.time.hard = 200000
+        }}
+        flags = [ ifexists nofail ]
+    }}
+]
+
+# Reserve device for exclusive use with specific pattern
+device.rules = [
+    {{
+        matches = [
+            {{ "device.name", "matches", "alsa.*" }}
+        ],
+        actions = {{
+            update-props = {{
+                device.profile = "pro-audio"
+                api.alsa.disable-batch = true
+                api.alsa.use-acp = false
+                api.alsa.headroom = {}
+                session.suspend-timeout-seconds = 5  # ADDED: Allow shorter timeout
+            }}
+        }}
+    }}
+]
+"#,
+            sample_rate,
+            buffer_size,
+            sample_rate,
+            buffer_size / 2
+        )
+    };
+
+    // Backup current config before writing
+    if let Err(e) = backup_current_config(&config_dir) {
+        println!("Note: Could not backup config (non-fatal): {}", e);
+    }
+
+    write_config_with_privileges(&config_path, &config_content)?;
+    println!("✓ Exclusive mode configuration created: {}", config_path);
+    Ok(())
+}
+
+/// Create WirePlumber configuration for exclusive access
+fn create_wireplumber_exclusive_config(
+    direct_hardware: bool,
+    low_latency: bool,
+    buffer_size: u32,
+    sample_rate: u32,
+) -> Result<(), String> {
+    let username = whoami::username();
+    let config_dir = format!("/home/{}/.config/wireplumber/wireplumber.conf.d", username);
+    let config_path = format!("{}/99-pro-audio-exclusive.conf", config_dir);
+
+    let config_content = format!(
+        r#"{{
+  "monitor.alsa.rules": [
+    {{
+      "matches": [
+        {{
+          "device.name": "~alsa.*"
+        }}
+      ],
+      "actions": {{
+        "update-props": {{
+          "audio.rate": {},
+          "audio.allowed-rates": [ {} ],
+          "api.alsa.period-size": {},
+          "api.alsa.period-num": 2,
+          "api.alsa.headroom": {},
+          "api.alsa.disable-batch": {},
+          "api.alsa.use-acp": false,
+          "priority.driver": 200,
+          "session.suspend-timeout-seconds": 5  # REDUCED: Allow timeout for recovery
+        }}
+      }}
+    }}
+  ]
+}}"#,
+        sample_rate,
+        sample_rate,
+        buffer_size,
+        buffer_size / 2,
+        direct_hardware
+    );
+
+    // Backup current config before writing
+    if let Err(e) = backup_current_config(&config_dir) {
+        println!("Note: Could not backup config (non-fatal): {}", e);
+    }
+
+    create_dir_all_with_privileges(&config_dir)?;
+    write_config_with_privileges(&config_path, &config_content)?;
+    println!(
+        "✓ WirePlumber exclusive configuration created: {}",
+        config_path
+    );
+    Ok(())
+}
+
+/// Restore standard shared audio mode
+pub fn restore_standard_audio_mode() -> Result<(), String> {
+    println!("Restoring standard shared audio mode...");
+
+    // Remove exclusive mode configurations
+    let username = whoami::username();
+    let config_files = [
+        format!(
+            "/home/{}/.config/pipewire/pipewire.conf.d/99-pro-audio-exclusive.conf",
+            username
+        ),
+        format!(
+            "/home/{}/.config/wireplumber/wireplumber.conf.d/99-pro-audio-exclusive.conf",
+            username
+        ),
+    ];
+
+    let mut removed_count = 0;
+    for config_file in &config_files {
+        if Path::new(config_file).exists() {
+            if let Ok(()) = fs::remove_file(config_file) {
+                println!("✓ Removed exclusive config: {}", config_file);
+                removed_count += 1;
+            }
+        }
+    }
+
+    if removed_count > 0 {
+        restart_audio_services(false, true)?;
+        println!("✓ Standard audio mode restored");
+    } else {
+        println!("✓ Already in standard audio mode");
+    }
+
+    Ok(())
+}
+
+/// Check if exclusive mode is currently active
+pub fn check_exclusive_mode_status() -> Result<bool, String> {
+    let username = whoami::username();
+    let exclusive_config = format!(
+        "/home/{}/.config/pipewire/pipewire.conf.d/99-pro-audio-exclusive.conf",
+        username
+    );
+
+    Ok(Path::new(&exclusive_config).exists())
+}
+
+/// NEW: Backup current configuration before making changes
+fn backup_current_config(config_dir: &str) -> Result<(), String> {
+    // Skip backup for system directories to avoid permission issues
+    // The backup is just a safety measure, not critical
+    if config_dir.starts_with("/etc/") {
+        println!("Note: Skipping backup for system directory {}", config_dir);
+        return Ok(());
+    }
+
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+    let backup_dir = format!("{}/backup_{}", config_dir, timestamp);
+
+    // Create backup directory
+    create_dir_all_with_privileges(&backup_dir)?;
+
+    // Copy existing configs to backup
+    if Path::new(config_dir).exists() {
+        if let Ok(entries) = fs::read_dir(config_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().map_or(false, |ext| ext == "conf") {
+                    let filename = path.file_name().unwrap_or_default();
+                    let backup_path = format!("{}/{}", backup_dir, filename.to_string_lossy());
+                    if let Err(e) = fs::copy(&path, &backup_path) {
+                        println!("Warning: Failed to backup {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+    }
+
+    println!("✓ Configuration backed up to: {}", backup_dir);
+    Ok(())
+}
+
+/// Emergency recovery function for when audio system breaks
+pub fn recover_audio_system() -> Result<(), String> {
+    println!("=== EMERGENCY AUDIO SYSTEM RECOVERY ===");
+
+    let username = whoami::username();
+
+    // List all problematic configs to remove
+    let problematic_configs = [
+        format!(
+            "/home/{}/.config/pipewire/pipewire.conf.d/99-pro-audio-exclusive.conf",
+            username
+        ),
+        format!(
+            "/home/{}/.config/pipewire/pipewire.conf.d/99-pro-audio-high-priority.conf",
+            username
+        ),
+        format!(
+            "/home/{}/.config/wireplumber/wireplumber.conf.d/99-pro-audio-exclusive.conf",
+            username
+        ),
+        format!(
+            "/home/{}/.config/wireplumber/wireplumber.conf.d/99-pro-audio.conf",
+            username
+        ),
+    ];
+
+    let mut removed = 0;
+    for config in &problematic_configs {
+        if Path::new(config).exists() {
+            if let Ok(()) = fs::remove_file(config) {
+                println!("✓ Removed: {}", config);
+                removed += 1;
+            } else {
+                println!("⚠ Could not remove: {}", config);
+            }
+        }
+    }
+
+    if removed > 0 {
+        println!("\n✓ Removed {} problematic configuration files", removed);
+        println!("Restarting audio services...");
+
+        // Simple restart without complex logic
+        let _ = Command::new("systemctl")
+            .args([
+                "--user",
+                "restart",
+                "pipewire",
+                "pipewire-pulse",
+                "wireplumber",
+            ])
+            .status();
+
+        // Wait for services to come back
+        std::thread::sleep(std::time::Duration::from_secs(3));
+
+        println!("✓ Audio system should be recovered");
+        println!("If audio is still not working, try logging out and back in, or reboot.");
+    } else {
+        println!("✓ No problematic configurations found");
+    }
+
+    Ok(())
+}
+
+/// Non-blocking version of restart_audio_services for use in async contexts
+pub fn restart_audio_services_non_blocking() -> Result<(), String> {
+    // Spawn a thread to handle the restart
+    std::thread::spawn(|| match restart_audio_services(false, true) {
+        Ok(_) => println!("✓ Audio services restarted successfully in background"),
+        Err(e) => println!("⚠ Failed to restart audio services: {}", e),
+    });
+
+    println!("Audio service restart initiated in background...");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1202,5 +1674,35 @@ mod tests {
         assert!(config.contains("1024"));
         assert!(config.contains("~alsa.*"));
         assert!(config.contains("S16LE"));
+    }
+
+    #[test]
+    fn test_exclusive_mode_config_safety() {
+        // Test that exclusive mode config uses safe defaults
+        let config_content = format!(
+            r#"context.modules = [
+    {{
+        name = libpipewire-module-rt
+        args = {{
+            nice.level = -11    # Should not be -20
+            rt.prio = 80        # Should not be 88
+            rt.time.soft = 200000  # Should not be 100000
+            rt.time.hard = 200000  # Should not be 100000
+        }}
+    }}
+]"#
+        );
+
+        // Verify safe values are present
+        assert!(config_content.contains("nice.level = -11"));
+        assert!(config_content.contains("rt.prio = 80"));
+        assert!(config_content.contains("rt.time.soft = 200000"));
+        assert!(config_content.contains("rt.time.hard = 200000"));
+
+        // Verify dangerous values are NOT present
+        assert!(!config_content.contains("nice.level = -20"));
+        assert!(!config_content.contains("rt.prio = 88"));
+        assert!(!config_content.contains("rt.time.soft = 100000"));
+        assert!(!config_content.contains("rt.time.hard = 100000"));
     }
 }

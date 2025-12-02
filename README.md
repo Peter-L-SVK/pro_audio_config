@@ -1,6 +1,6 @@
-# Pro Audio Config <div style="text-align: right">[![Rust CI](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml/badge.svg)](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml) </div>
+# Pro Audio Config <div style="text-align: right">[![Rust CI](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml/badge.svg)](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml)</div>
 
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/leukanic.peter) - If you wish to support me for future updates with some spare change
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) <a href="https://buymeacoffee.com/leukanic.peter"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" height="20px"></a>
 
 A professional audio configuration tool for Linux systems that provides a simple graphical interface to manage PipeWire and ALSA audio settings. Finally, an easy way to configure sample rates, bit depths, and buffer sizes without digging through config files.
 
@@ -193,7 +193,7 @@ pro_audio_config/
 ### Configuration Scope Implementation
 - **User Configuration**: Uses `~/.config/pipewire/pipewire.conf.d/` directory
 - **System Configuration**: Uses `/etc/pipewire/pipewire.conf.d/` directory
-- **Preference Persistence**: User preferences saved in `~/.config/pro-audio-config/preferences.toml`
+- **Preference Persistence**: User preferences saved in `~/.config/proaudioconfig/preferences.toml`
 - **Authentication**: Uses system's policy kit for secure privilege escalation
 
 ### Audio Format Mapping
@@ -254,7 +254,7 @@ For support and questions:
 - [x] User vs system-wide configuration scope
 - [ ] Additional audio backends (JACK)
 - [ ] Preset configurations
-- [ ] Advanced audio routing
+- [x] Advanced audio routing
 - [ ] Real-time audio monitoring
 
 ## Acknowledgments

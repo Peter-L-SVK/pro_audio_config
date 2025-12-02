@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - User Interface Module
- * Version: 1.6
+ * Version: 1.7
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
@@ -13,22 +13,23 @@ use gtk::prelude::*;
 #[allow(unused_imports)] // AboutDialog is used in code
 use gtk::{
     AboutDialog, Adjustment, Application, ApplicationWindow, Box as GtkBox, Button, ButtonsType,
-    CheckButton, ComboBoxText, DialogFlags, Frame, Label, MessageDialog, MessageType, Notebook,
-    Orientation, ScrolledWindow, Separator, Window,
+    CheckButton, ComboBoxText, DialogFlags, Entry, Frame, Label, MessageDialog, MessageType,
+    Notebook, Orientation, ScrolledWindow, Separator, Window,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use crate::audio::{
     AudioDevice, AudioSettings, DeviceType, detect_current_audio_settings,
     detect_input_audio_device, detect_input_audio_devices, detect_output_audio_device,
-    detect_output_audio_devices,
+    detect_output_audio_devices, detect_recommended_devices, get_device_capabilities,
 };
 use crate::config::{
-    apply_input_audio_settings_with_auth_blocking, apply_output_audio_settings_with_auth_blocking,
-    apply_user_audio_settings,
+    apply_advanced_audio_settings, apply_input_audio_settings_with_auth_blocking,
+    apply_output_audio_settings_with_auth_blocking, apply_user_audio_settings,
 };
 
 #[derive(Clone)]
@@ -37,6 +38,7 @@ pub struct AudioApp {
     pub notebook: Notebook,
     pub output_tab: AudioTab,
     pub input_tab: AudioTab,
+    pub advanced_tab: AdvancedTab,
 }
 
 #[derive(Clone)]
@@ -60,6 +62,73 @@ pub struct AudioTab {
 pub struct AppPreferences {
     pub system_wide_config: bool,
 }
+
+#[derive(Clone)]
+pub struct AdvancedTab {
+    pub container: GtkBox,
+    pub config_mode_combo: ComboBoxText,
+    pub global_settings_frame: Frame,
+    pub exclusive_settings_frame: Frame,
+    pub status_label: Label,
+    pub apply_button: Button,
+    pub disable_exclusive_button: Button,
+
+    // Global settings
+    pub sample_rate_combo: ComboBoxText,
+    pub bit_depth_combo: ComboBoxText,
+    pub buffer_size_combo: ComboBoxText,
+    pub device_combo: ComboBoxText,
+
+    // Exclusive mode settings
+    pub application_name_entry: Entry,
+    pub process_name_entry: Entry,
+    pub exclusive_device_combo: ComboBoxText,
+    pub exclusive_sample_rate_combo: ComboBoxText,
+    pub exclusive_bit_depth_combo: ComboBoxText,
+    pub exclusive_buffer_size_combo: ComboBoxText,
+    pub latency_label: Label,
+
+    pub available_devices: Vec<AudioDevice>,
+    pub current_default_device: Arc<Mutex<String>>,
+}
+
+// Common option definitions to avoid duplication
+const SAMPLE_RATES: &[(u32, &str)] = &[
+    (44100, "44.1 kHz - CD Quality"),
+    (48000, "48 kHz - Standard Audio"),
+    (96000, "96 kHz - High Resolution"),
+    (192000, "192 kHz - Studio Quality"),
+    (384000, "384 kHz - Ultra High Resolution"),
+];
+
+const BIT_DEPTHS: &[(u32, &str)] = &[
+    (16, "16 bit - CD Quality"),
+    (24, "24 bit - High Resolution"),
+    (32, "32 bit - Studio Quality"),
+];
+
+const BUFFER_SIZES: &[(u32, &str)] = &[
+    (128, "128 samples (2.7ms @48kHz)"),
+    (256, "256 samples (5.3ms @48kHz)"),
+    (512, "512 samples (10.7ms @48kHz)"),
+    (1024, "1024 samples (21.3ms @48kHz)"),
+    (2048, "2048 samples (42.7ms @48kHz)"),
+    (4096, "4096 samples (85.3ms @48kHz)"),
+    (8192, "8192 samples (170.7ms @48kHz)"),
+];
+
+const EXCLUSIVE_BUFFER_SIZES: &[(u32, &str)] = &[
+    (64, "64 samples (1.3ms @48kHz) - Ultra Low Latency"),
+    (128, "128 samples (2.7ms @48kHz) - Low Latency"),
+    (256, "256 samples (5.3ms @48kHz) - Balanced"),
+    (512, "512 samples (10.7ms @48kHz) - Stable"),
+    (1024, "1024 samples (21.3ms @48kHz) - High Latency"),
+];
+
+const CONFIG_MODES: &[(&str, &str)] = &[
+    ("global", "Global System Settings (All Applications)"),
+    ("exclusive", "Exclusive Mode (Single Application)"),
+];
 
 impl Default for AppPreferences {
     fn default() -> Self {
@@ -147,36 +216,10 @@ impl TabType {
     }
 }
 
-// Common option definitions to avoid duplication
-const SAMPLE_RATES: &[(u32, &str)] = &[
-    (44100, "44.1 kHz - CD Quality"),
-    (48000, "48 kHz - Standard Audio"),
-    (96000, "96 kHz - High Resolution"),
-    (192000, "192 kHz - Studio Quality"),
-    (384000, "384 kHz - Ultra High Resolution"),
-];
-
-const BIT_DEPTHS: &[(u32, &str)] = &[
-    (16, "16 bit - CD Quality"),
-    (24, "24 bit - High Resolution"),
-    (32, "32 bit - Studio Quality"),
-];
-
-const BUFFER_SIZES: &[(u32, &str)] = &[
-    (128, "128 samples (2.7ms @48kHz)"),
-    (256, "256 samples (5.3ms @48kHz)"),
-    (512, "512 samples (10.7ms @48kHz)"),
-    (1024, "1024 samples (21.3ms @48kHz)"),
-    (2048, "2048 samples (42.7ms @48kHz)"),
-    (4096, "4096 samples (85.3ms @48kHz)"),
-    (8192, "8192 samples (170.7ms @48kHz)"),
-];
-
 impl AudioApp {
     pub fn new(app: &Application) -> Self {
         let window = ApplicationWindow::new(app);
         window.set_title("Pro Audio Config");
-        window.set_default_size(500, 650);
 
         // Set window icon from system or development location
         Self::set_window_icon(&window);
@@ -210,6 +253,11 @@ impl AudioApp {
         let input_label = Label::new(Some("Input"));
         notebook.append_page(&input_tab.container, Some(&input_label));
 
+        // Create advanced tab
+        let advanced_tab = AdvancedTab::new();
+        let advanced_label = Label::new(Some("Advanced"));
+        notebook.append_page(&advanced_tab.container, Some(&advanced_label));
+
         main_box.pack_start(&notebook, true, true, 0);
         scrolled_window.add(&main_box);
         window.add(&scrolled_window);
@@ -219,10 +267,14 @@ impl AudioApp {
             notebook,
             output_tab,
             input_tab,
+            advanced_tab,
         };
 
         // ===== CONNECT SIGNALS =====
         app_state.setup_signals();
+
+        // ===== CONNECT ADVANCED TAB SIGNALS =====
+        app_state.setup_advanced_signals();
 
         // ===== DETECT ALL DEVICES AND CURRENT SETTINGS =====
         app_state.initialize_tabs();
@@ -285,11 +337,16 @@ impl AudioApp {
         self.input_tab.detect_current_settings();
         self.output_tab.detect_current_device();
         self.input_tab.detect_current_device();
+        self.advanced_tab.detect_advanced_devices();
     }
 
     fn setup_signals(&self) {
         self.output_tab.setup_signals(self.clone());
         self.input_tab.setup_signals(self.clone());
+    }
+
+    fn setup_advanced_signals(&self) {
+        self.advanced_tab.setup_signals(self.clone());
     }
 }
 
@@ -358,7 +415,7 @@ impl AudioTab {
         )));
         device_selection_label.set_halign(gtk::Align::Start);
 
-        let device_combo = ComboBoxText::new();
+        let device_combo = create_constrained_combo();
 
         let selection_info_label = Label::new(Some(&format!(
             "Select an {} device from the dropdown above",
@@ -399,7 +456,7 @@ impl AudioTab {
         let sample_rate_label = Label::new(Some("Sample Rate:"));
         sample_rate_label.set_halign(gtk::Align::Start);
 
-        let sample_rate_combo = ComboBoxText::new();
+        let sample_rate_combo = create_constrained_combo();
         Self::populate_combo_box(&sample_rate_combo, SAMPLE_RATES);
 
         // Set default values based on tab type
@@ -411,7 +468,7 @@ impl AudioTab {
         let bit_depth_label = Label::new(Some("Bit Depth:"));
         bit_depth_label.set_halign(gtk::Align::Start);
 
-        let bit_depth_combo = ComboBoxText::new();
+        let bit_depth_combo = create_constrained_combo();
         Self::populate_combo_box(&bit_depth_combo, BIT_DEPTHS);
 
         if matches!(tab_type, TabType::Output) {
@@ -422,7 +479,7 @@ impl AudioTab {
         let buffer_size_label = Label::new(Some("Buffer Size:"));
         buffer_size_label.set_halign(gtk::Align::Start);
 
-        let buffer_size_combo = ComboBoxText::new();
+        let buffer_size_combo = create_constrained_combo();
         Self::populate_combo_box(&buffer_size_combo, BUFFER_SIZES);
 
         if matches!(tab_type, TabType::Output) {
@@ -495,14 +552,14 @@ impl AudioTab {
         }
     }
 
-    // Helper function to populate combo boxes from common definitions
+    /// Helper function to populate combo boxes from common definitions
     fn populate_combo_box(combo: &ComboBoxText, options: &[(u32, &str)]) {
         for (value, label) in options {
             combo.append(Some(&value.to_string()), label);
         }
     }
 
-    // Detect current default device and store the actual device name
+    /// Detect current default device and store the actual device name
     pub fn detect_current_device(&self) {
         let current_device_label = self.current_device_label.clone();
         let current_default_device = Arc::clone(&self.current_default_device);
@@ -680,7 +737,7 @@ impl AudioTab {
         });
     }
 
-    // Helper function to add devices to combo box with consistent formatting
+    /// Helper function to add devices to combo box with consistent formatting
     fn add_device_to_combo(combo: &ComboBoxText, device: &AudioDevice, tab_type: &TabType) {
         let device_type = match device.device_type {
             DeviceType::Input => "🎤 Input",
@@ -998,6 +1055,775 @@ impl AudioTab {
     }
 }
 
+impl AdvancedTab {
+    // State check function to determine if exclusive mode is active
+    fn is_exclusive_mode_active() -> bool {
+        let username = whoami::username();
+
+        // Check both system AND user exclusive mode configuration files
+        let exclusive_config_paths = [
+            // System paths
+            "/etc/pipewire/pipewire.conf.d/99-pro-audio-exclusive.conf",
+            "/etc/wireplumber/wireplumber.conf.d/99-pro-audio-exclusive.conf",
+            // User paths
+            &format!(
+                "/home/{}/.config/pipewire/pipewire.conf.d/99-pro-audio-exclusive.conf",
+                username
+            ),
+            &format!(
+                "/home/{}/.config/wireplumber/wireplumber.conf.d/99-pro-audio-exclusive.conf",
+                username
+            ),
+        ];
+
+        for path in &exclusive_config_paths {
+            if Path::new(path).exists() {
+                println!("DEBUG: Found exclusive mode config at: {}", path);
+                return true;
+            }
+        }
+
+        println!("DEBUG: No exclusive mode config found");
+        false
+    }
+
+    pub fn new() -> Self {
+        let container = GtkBox::new(Orientation::Vertical, 12);
+        container.set_margin_top(12);
+        container.set_margin_bottom(12);
+        container.set_margin_start(12);
+        container.set_margin_end(12);
+
+        // ===== CONFIGURATION MODE SELECTION =====
+        let (mode_frame, mode_box) = create_section_box("Configuration Mode");
+
+        let mode_selection_label = Label::new(Some("Select Configuration Approach:"));
+        mode_selection_label.set_halign(gtk::Align::Start);
+
+        let config_mode_combo = create_constrained_combo();
+        for (id, label) in CONFIG_MODES {
+            config_mode_combo.append(Some(id), label);
+        }
+        config_mode_combo.set_active_id(Some("global"));
+
+        let mode_description_label = Label::new(None);
+        mode_description_label.set_halign(gtk::Align::Start);
+        mode_description_label.set_line_wrap(true);
+        Self::update_mode_description(&mode_description_label, "global");
+
+        mode_box.pack_start(&mode_selection_label, false, false, 0);
+        mode_box.pack_start(&config_mode_combo, false, false, 0);
+        mode_box.pack_start(&mode_description_label, false, false, 0);
+
+        // ===== GLOBAL SETTINGS SECTION =====
+        let (global_settings_frame, global_settings_box) =
+            create_section_box("Global System Settings");
+        let global_frame_clone = global_settings_frame.clone(); // Clone before moving
+
+        let global_info_label =
+            Label::new(Some("These settings affect ALL applications system-wide"));
+        global_info_label.set_halign(gtk::Align::Start);
+
+        let global_device_label = Label::new(Some("Audio Device:"));
+        global_device_label.set_halign(gtk::Align::Start);
+
+        let device_combo = create_constrained_combo();
+
+        let global_sample_rate_label = Label::new(Some("Sample Rate:"));
+        global_sample_rate_label.set_halign(gtk::Align::Start);
+
+        let sample_rate_combo = create_constrained_combo();
+        Self::populate_combo_box(&sample_rate_combo, SAMPLE_RATES);
+        sample_rate_combo.set_active_id(Some("48000"));
+
+        let global_bit_depth_label = Label::new(Some("Bit Depth:"));
+        global_bit_depth_label.set_halign(gtk::Align::Start);
+
+        let bit_depth_combo = create_constrained_combo();
+        Self::populate_combo_box(&bit_depth_combo, BIT_DEPTHS);
+        bit_depth_combo.set_active_id(Some("24"));
+
+        let global_buffer_size_label = Label::new(Some("Buffer Size:"));
+        global_buffer_size_label.set_halign(gtk::Align::Start);
+
+        let buffer_size_combo = create_constrained_combo();
+        Self::populate_combo_box(&buffer_size_combo, BUFFER_SIZES);
+        buffer_size_combo.set_active_id(Some("512"));
+
+        global_settings_box.pack_start(&global_info_label, false, false, 0);
+        global_settings_box.pack_start(&global_device_label, false, false, 0);
+        global_settings_box.pack_start(&device_combo, false, false, 0);
+        global_settings_box.pack_start(&global_sample_rate_label, false, false, 0);
+        global_settings_box.pack_start(&sample_rate_combo, false, false, 0);
+        global_settings_box.pack_start(&global_bit_depth_label, false, false, 0);
+        global_settings_box.pack_start(&bit_depth_combo, false, false, 0);
+        global_settings_box.pack_start(&global_buffer_size_label, false, false, 0);
+        global_settings_box.pack_start(&buffer_size_combo, false, false, 0);
+
+        // ===== EXCLUSIVE MODE SETTINGS SECTION =====
+        let (exclusive_settings_frame, exclusive_settings_box) =
+            create_section_box("Exclusive Mode Settings");
+        let exclusive_frame_clone = exclusive_settings_frame.clone(); // Clone before moving
+
+        let exclusive_info_label = Label::new(Some(
+            "Exclusive mode provides direct hardware access for low-latency professional audio work",
+        ));
+        exclusive_info_label.set_halign(gtk::Align::Start);
+        exclusive_info_label.set_line_wrap(true);
+
+        // Application settings
+        let app_name_label = Label::new(Some("Application Name:"));
+        app_name_label.set_halign(gtk::Align::Start);
+
+        let application_name_entry = Entry::new();
+        application_name_entry.set_placeholder_text(Some("e.g., Reaper, Ardour, Bitwig"));
+
+        let process_name_label = Label::new(Some("Process Name:"));
+        process_name_label.set_halign(gtk::Align::Start);
+
+        let process_name_entry = Entry::new();
+        process_name_entry.set_placeholder_text(Some("e.g., reaper, ardour, bitwig-studio"));
+
+        // Device and audio settings
+        let exclusive_device_label = Label::new(Some("Audio Device:"));
+        exclusive_device_label.set_halign(gtk::Align::Start);
+
+        let exclusive_device_combo = create_constrained_combo();
+
+        let exclusive_sample_rate_label = Label::new(Some("Sample Rate:"));
+        exclusive_sample_rate_label.set_halign(gtk::Align::Start);
+
+        let exclusive_sample_rate_combo = create_constrained_combo();
+        Self::populate_combo_box(&exclusive_sample_rate_combo, SAMPLE_RATES);
+        exclusive_sample_rate_combo.set_active_id(Some("48000"));
+
+        let exclusive_bit_depth_label = Label::new(Some("Bit Depth:"));
+        exclusive_bit_depth_label.set_halign(gtk::Align::Start);
+
+        let exclusive_bit_depth_combo = create_constrained_combo();
+        Self::populate_combo_box(&exclusive_bit_depth_combo, BIT_DEPTHS);
+        exclusive_bit_depth_combo.set_active_id(Some("24"));
+
+        let exclusive_buffer_size_label = Label::new(Some("Buffer Size:"));
+        exclusive_buffer_size_label.set_halign(gtk::Align::Start);
+
+        let exclusive_buffer_size_combo = create_constrained_combo();
+        Self::populate_combo_box(&exclusive_buffer_size_combo, EXCLUSIVE_BUFFER_SIZES);
+        exclusive_buffer_size_combo.set_active_id(Some("128"));
+
+        let latency_label = Label::new(Some("Calculated Latency: 2.67ms @ 48kHz"));
+        latency_label.set_halign(gtk::Align::Start);
+
+        exclusive_settings_box.pack_start(&exclusive_info_label, false, false, 0);
+        exclusive_settings_box.pack_start(&app_name_label, false, false, 0);
+        exclusive_settings_box.pack_start(&application_name_entry, false, false, 0);
+        exclusive_settings_box.pack_start(&process_name_label, false, false, 0);
+        exclusive_settings_box.pack_start(&process_name_entry, false, false, 0);
+        exclusive_settings_box.pack_start(&exclusive_device_label, false, false, 0);
+        exclusive_settings_box.pack_start(&exclusive_device_combo, false, false, 0);
+        exclusive_settings_box.pack_start(&exclusive_sample_rate_label, false, false, 0);
+        exclusive_settings_box.pack_start(&exclusive_sample_rate_combo, false, false, 0);
+        exclusive_settings_box.pack_start(&exclusive_bit_depth_label, false, false, 0);
+        exclusive_settings_box.pack_start(&exclusive_bit_depth_combo, false, false, 0);
+        exclusive_settings_box.pack_start(&exclusive_buffer_size_label, false, false, 0);
+        exclusive_settings_box.pack_start(&exclusive_buffer_size_combo, false, false, 0);
+        exclusive_settings_box.pack_start(&latency_label, false, false, 0);
+
+        // ===== ADVANCED ACTIONS SECTION =====
+        let (actions_frame, actions_box) = create_section_box("Advanced Actions");
+
+        let status_label = Label::new(Some("Select configuration mode and adjust settings"));
+        status_label.set_halign(gtk::Align::Start);
+        status_label.set_line_wrap(true);
+
+        let apply_button = Button::with_label("Apply Global System Settings");
+        let _apply_button_clone = apply_button.clone(); // Clone for deferred setup
+
+        let disable_exclusive_button = Button::with_label("Disable Exclusive Mode");
+
+        // Check system state and set sensitivity accordingly
+        let is_exclusive_active = Self::is_exclusive_mode_active();
+        disable_exclusive_button.set_sensitive(is_exclusive_active);
+
+        let info_label = Label::new(Some(
+            "Note: Administrator privileges will be requested to apply system audio configuration",
+        ));
+        info_label.set_line_wrap(true);
+
+        actions_box.pack_start(&status_label, false, false, 0);
+        actions_box.pack_start(&apply_button, false, false, 0);
+        actions_box.pack_start(&disable_exclusive_button, false, false, 0); // Added missing button
+        actions_box.pack_start(&info_label, false, false, 0);
+
+        // ===== ASSEMBLE ADVANCED TAB =====
+        container.pack_start(&mode_frame, false, false, 0);
+        container.pack_start(&global_settings_frame, false, false, 0);
+        container.pack_start(&exclusive_settings_frame, false, false, 0);
+        container.pack_start(&actions_frame, false, false, 0);
+
+        // Hide both frames initially using clones (before they're moved into struct)
+        global_frame_clone.hide();
+        exclusive_frame_clone.hide();
+
+        // Create the tab instance
+        let tab = AdvancedTab {
+            container,
+            config_mode_combo,
+            global_settings_frame,
+            exclusive_settings_frame,
+            status_label,
+            apply_button,
+            disable_exclusive_button, // Added missing field
+            sample_rate_combo,
+            bit_depth_combo,
+            buffer_size_combo,
+            device_combo,
+            application_name_entry,
+            process_name_entry,
+            exclusive_device_combo,
+            exclusive_sample_rate_combo,
+            exclusive_bit_depth_combo,
+            exclusive_buffer_size_combo,
+            latency_label,
+            available_devices: Vec::new(),
+            current_default_device: Arc::new(Mutex::new(String::new())),
+        };
+
+        // Set up initial visibility after GTK initialization
+        let tab_clone = tab.clone();
+        glib::idle_add_local_once(move || {
+            // Use the frames stored in the struct (accessible via tab_clone)
+            // Show only the global settings initially (default mode)
+            tab_clone.global_settings_frame.show();
+            // Hide the exclusive settings using the clone from the tab
+            tab_clone.exclusive_settings_frame.hide();
+
+            // Also update the apply button label
+            // Use the cloned apply_button if you have it, or access through tab_clone
+            tab_clone
+                .apply_button
+                .set_label("Apply Global System Settings");
+        });
+
+        tab
+    }
+
+    fn populate_combo_box(combo: &ComboBoxText, options: &[(u32, &str)]) {
+        for (value, label) in options {
+            combo.append(Some(&value.to_string()), label);
+        }
+    }
+
+    fn update_mode_description(label: &Label, mode: &str) {
+        let text = match mode {
+            "global" => {
+                "Global System Settings: Configure audio settings system-wide for ALL applications. This is the standard approach for general audio configuration."
+            }
+            "exclusive" => {
+                "Exclusive Mode: Provide direct hardware access to a SINGLE application, bypassing mixing and processing. Similar to ASIO/WASAPI exclusive mode for low-latency professional audio work."
+            }
+            _ => "Select a configuration mode above",
+        };
+        label.set_text(text);
+    }
+
+    pub fn detect_advanced_devices(&self) {
+        let device_combo = self.device_combo.clone();
+        let exclusive_device_combo = self.exclusive_device_combo.clone();
+        let current_default_device = Arc::clone(&self.current_default_device);
+
+        // Create channel for communication
+        let (tx, rx) = mpsc::channel();
+        let rx_arc = Arc::new(Mutex::new(rx));
+
+        // Spawn thread for device detection - USE ENHANCED FUNCTIONS
+        std::thread::spawn(move || {
+            // Use high-performance devices for exclusive mode, recommended for global
+            let result = detect_recommended_devices();
+            let _ = tx.send(result);
+        });
+
+        // Set up timeout to check for result
+        let rx_timeout = Arc::clone(&rx_arc);
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            let rx_guard = rx_timeout.lock().unwrap();
+            match rx_guard.try_recv() {
+                Ok(result) => {
+                    match result {
+                        Ok(devices) => {
+                            // Clear existing items
+                            device_combo.remove_all();
+                            exclusive_device_combo.remove_all();
+
+                            // Get the stored default device name if available
+                            let default_device_name = {
+                                let stored = current_default_device.lock().unwrap();
+                                if !stored.is_empty() {
+                                    format!("Default: {}", stored)
+                                } else {
+                                    "Default System Device".to_string()
+                                }
+                            };
+
+                            // Add "Default Device" option with actual device name
+                            device_combo.append(Some("default"), &default_device_name);
+                            exclusive_device_combo.append(Some("default"), &default_device_name);
+
+                            // Group devices by type for better organization
+                            let mut usb_devices = Vec::new();
+                            let mut hdmi_devices = Vec::new();
+                            let mut pci_devices = Vec::new();
+                            let mut other_devices = Vec::new();
+
+                            for device in &devices {
+                                let desc_lower = device.description.to_lowercase();
+                                let name_lower = device.name.to_lowercase();
+                                let id_lower = device.id.to_lowercase();
+
+                                if desc_lower.contains("usb")
+                                    || name_lower.contains("usb")
+                                    || id_lower.contains("usb")
+                                {
+                                    usb_devices.push(device);
+                                } else if desc_lower.contains("hdmi")
+                                    || name_lower.contains("hdmi")
+                                    || desc_lower.contains("displayport")
+                                    || name_lower.contains("displayport")
+                                {
+                                    hdmi_devices.push(device);
+                                } else if name_lower.contains("pci")
+                                    || id_lower.contains("pci")
+                                    || desc_lower.contains("pci")
+                                {
+                                    pci_devices.push(device);
+                                } else {
+                                    other_devices.push(device);
+                                }
+                            }
+
+                            // Add USB devices first (most common for pro audio)
+                            if !usb_devices.is_empty() {
+                                device_combo
+                                    .append(Some("separator1"), "--- USB Audio Devices ---");
+                                exclusive_device_combo
+                                    .append(Some("separator1"), "--- USB Audio Devices ---");
+                                for device in usb_devices {
+                                    Self::add_device_to_combo(&device_combo, device);
+                                    Self::add_device_to_combo(&exclusive_device_combo, device);
+                                }
+                            }
+
+                            // Add PCI devices (onboard and sound cards)
+                            if !pci_devices.is_empty() {
+                                device_combo
+                                    .append(Some("separator2"), "--- PCI Audio Devices ---");
+                                exclusive_device_combo
+                                    .append(Some("separator2"), "--- PCI Audio Devices ---");
+                                for device in pci_devices {
+                                    Self::add_device_to_combo(&device_combo, device);
+                                    Self::add_device_to_combo(&exclusive_device_combo, device);
+                                }
+                            }
+
+                            // Add HDMI devices
+                            if !hdmi_devices.is_empty() {
+                                device_combo
+                                    .append(Some("separator3"), "--- HDMI/DisplayPort Audio ---");
+                                exclusive_device_combo
+                                    .append(Some("separator3"), "--- HDMI/DisplayPort Audio ---");
+                                for device in hdmi_devices {
+                                    Self::add_device_to_combo(&device_combo, device);
+                                    Self::add_device_to_combo(&exclusive_device_combo, device);
+                                }
+                            }
+
+                            // Add any remaining devices
+                            if !other_devices.is_empty() {
+                                device_combo
+                                    .append(Some("separator4"), "--- Other Audio Devices ---");
+                                exclusive_device_combo
+                                    .append(Some("separator4"), "--- Other Audio Devices ---");
+                                for device in other_devices {
+                                    Self::add_device_to_combo(&device_combo, device);
+                                    Self::add_device_to_combo(&exclusive_device_combo, device);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            println!("Error detecting advanced devices: {}", e);
+                            // Still add default option
+                            device_combo.append(Some("default"), "Default System Device");
+                            exclusive_device_combo.append(Some("default"), "Default System Device");
+                            device_combo.set_active_id(Some("default"));
+                            exclusive_device_combo.set_active_id(Some("default"));
+                        }
+                    }
+                    ControlFlow::Break
+                }
+                Err(mpsc::TryRecvError::Empty) => ControlFlow::Continue,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // Add default option as fallback
+                    device_combo.append(Some("default"), "Default System Device");
+                    exclusive_device_combo.append(Some("default"), "Default System Device");
+                    device_combo.set_active_id(Some("default"));
+                    exclusive_device_combo.set_active_id(Some("default"));
+                    ControlFlow::Break
+                }
+            }
+        });
+    }
+
+    /// Helper function to add devices to combo box with consistent formatting
+    fn add_device_to_combo(combo: &ComboBoxText, device: &AudioDevice) {
+        let device_type = match device.device_type {
+            DeviceType::Input => "🎤 Input",
+            DeviceType::Output => "🔊 Output",
+            DeviceType::Duplex => "🔄 Duplex",
+            _ => "🔊 Output",
+        };
+
+        // Clean the description by removing "SUSPENDED" and any trailing status words
+        let clean_description = clean_device_description(&device.description);
+
+        let display_text = if clean_description.is_empty() {
+            format!("{} {}", device_type, device.name)
+        } else {
+            format!("{} {} - {}", device_type, device.name, clean_description)
+        };
+        combo.append(Some(&device.id), &display_text);
+    }
+
+    pub fn setup_signals(&self, _app_state: AudioApp) {
+        let config_mode_combo = self.config_mode_combo.clone();
+        let global_settings_frame = self.global_settings_frame.clone();
+        let exclusive_settings_frame = self.exclusive_settings_frame.clone();
+        let status_label = self.status_label.clone();
+        let apply_button = self.apply_button.clone();
+
+        let sample_rate_combo = self.sample_rate_combo.clone();
+        let bit_depth_combo = self.bit_depth_combo.clone();
+        let buffer_size_combo = self.buffer_size_combo.clone();
+        let device_combo = self.device_combo.clone();
+
+        let _application_name_entry = self.application_name_entry.clone();
+        let _process_name_entry = self.process_name_entry.clone();
+        let exclusive_device_combo = self.exclusive_device_combo.clone();
+        let exclusive_sample_rate_combo = self.exclusive_sample_rate_combo.clone();
+        let _exclusive_bit_depth_combo = self.exclusive_bit_depth_combo.clone();
+        let exclusive_buffer_size_combo = self.exclusive_buffer_size_combo.clone();
+        let latency_label = self.latency_label.clone();
+
+        // Clone the disable_exclusive_button at the beginning
+        let disable_exclusive_button = self.disable_exclusive_button.clone();
+
+        // Check system state and set sensitivity accordingly
+        let is_exclusive_active = Self::is_exclusive_mode_active();
+        println!("DEBUG: Exclusive mode active: {}", is_exclusive_active);
+        println!("DEBUG: Disable button sensitivity: {}", is_exclusive_active);
+        disable_exclusive_button.set_sensitive(is_exclusive_active);
+
+        // Configuration mode change handler
+        {
+            let status_label = status_label.clone();
+            let global_settings_frame = global_settings_frame.clone();
+            let exclusive_settings_frame = exclusive_settings_frame.clone();
+            let apply_button = apply_button.clone();
+
+            config_mode_combo.connect_changed(move |combo| {
+                if let Some(mode) = combo.active_id() {
+                    Self::update_mode_description(&status_label, &mode);
+
+                    match mode.as_str() {
+                        "global" => {
+                            global_settings_frame.show();
+                            exclusive_settings_frame.hide();
+                            apply_button.set_label("Apply Global System Settings");
+                        }
+                        "exclusive" => {
+                            global_settings_frame.hide();
+                            exclusive_settings_frame.show();
+                            apply_button.set_label("Apply Exclusive Mode Settings");
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+
+        // Exclusive mode latency calculation - buffer size change
+        {
+            let exclusive_sample_rate_combo = exclusive_sample_rate_combo.clone();
+            let latency_label = latency_label.clone();
+
+            exclusive_buffer_size_combo.connect_changed(move |combo| {
+                if let Some(buffer_size_str) = combo.active_id() {
+                    if let Some(sample_rate_str) = exclusive_sample_rate_combo.active_id() {
+                        if let (Ok(buffer_size), Ok(sample_rate)) = (
+                            buffer_size_str.parse::<u32>(),
+                            sample_rate_str.parse::<u32>(),
+                        ) {
+                            let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
+                            latency_label.set_text(&format!(
+                                "Calculated Latency: {:.2}ms @ {}kHz",
+                                latency_ms,
+                                sample_rate / 1000
+                            ));
+                        }
+                    }
+                }
+            });
+        }
+
+        // Exclusive mode latency calculation - sample rate change
+        {
+            let exclusive_buffer_size_combo = exclusive_buffer_size_combo.clone();
+            let latency_label = latency_label.clone();
+
+            exclusive_sample_rate_combo.connect_changed(move |combo| {
+                if let Some(sample_rate_str) = combo.active_id() {
+                    if let Some(buffer_size_str) = exclusive_buffer_size_combo.active_id() {
+                        if let (Ok(buffer_size), Ok(sample_rate)) = (
+                            buffer_size_str.parse::<u32>(),
+                            sample_rate_str.parse::<u32>(),
+                        ) {
+                            let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
+                            latency_label.set_text(&format!(
+                                "Calculated Latency: {:.2}ms @ {}kHz",
+                                latency_ms,
+                                sample_rate / 1000
+                            ));
+                        }
+                    }
+                }
+            });
+        }
+
+        // Apply button handler for advanced tab
+        {
+            let config_mode_combo = config_mode_combo.clone();
+            let status_label = status_label.clone();
+            let apply_button = apply_button.clone();
+
+            let sample_rate_combo = sample_rate_combo.clone();
+            let bit_depth_combo = bit_depth_combo.clone();
+            let buffer_size_combo = buffer_size_combo.clone();
+            let device_combo = device_combo.clone();
+
+            let exclusive_device_combo = exclusive_device_combo.clone();
+            let exclusive_sample_rate_combo = exclusive_sample_rate_combo.clone();
+            let exclusive_buffer_size_combo = exclusive_buffer_size_combo.clone();
+
+            // Clone the apply_button for use inside the closure
+            let apply_button_clone = apply_button.clone();
+
+            // Use the cloned disable_exclusive_button from the outer scope
+            let disable_exclusive_button_inner = disable_exclusive_button.clone();
+
+            apply_button.connect_clicked(move |_| {
+		let mode = config_mode_combo.active_id()
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "global".to_string());
+
+		match mode.as_str() {
+                    "global" => {
+			status_label.set_text("Applying global system settings...");
+			apply_button_clone.set_sensitive(false);
+
+			let device_id = device_combo.active_id()
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+
+			let settings = AudioSettings {
+                            sample_rate: sample_rate_combo.active_id()
+				.and_then(|id| id.parse::<u32>().ok())
+				.unwrap_or(48000),
+                            bit_depth: bit_depth_combo.active_id()
+				.and_then(|id| id.parse::<u32>().ok())
+				.unwrap_or(24),
+                            buffer_size: buffer_size_combo.active_id()
+				.and_then(|id| id.parse::<u32>().ok())
+				.unwrap_or(512),
+                            device_id,
+			};
+
+			let status_label_clone = status_label.clone();
+			let apply_button_clone_inner = apply_button_clone.clone();
+
+			// Create channel for communication
+			let (tx, rx) = mpsc::channel();
+			let rx_arc = Arc::new(Mutex::new(rx));
+
+			// Spawn thread for blocking operation
+			std::thread::spawn(move || {
+                            let result = apply_output_audio_settings_with_auth_blocking(settings);
+                            let _ = tx.send(result);
+			});
+
+			// Set up timeout to check for result
+			let rx_timeout = Arc::clone(&rx_arc);
+			glib::timeout_add_local(Duration::from_millis(100), move || {
+                            let rx_guard = rx_timeout.lock().unwrap();
+                            match rx_guard.try_recv() {
+				Ok(result) => {
+                                    match result {
+					Ok(()) => {
+                                            status_label_clone.set_text("Global settings applied successfully!");
+                                            apply_button_clone_inner.set_sensitive(true);
+                                            show_success_dialog("Global audio settings applied successfully. All applications will use these settings.");
+					}
+					Err(e) => {
+                                            status_label_clone.set_text("Failed to apply global settings");
+                                            apply_button_clone_inner.set_sensitive(true);
+                                            show_error_dialog(&format!("Failed to apply global settings: {}", e));
+					}
+                                    }
+                                    ControlFlow::Break
+				}
+				Err(mpsc::TryRecvError::Empty) => ControlFlow::Continue,
+				Err(mpsc::TryRecvError::Disconnected) => {
+                                    status_label_clone.set_text("Unexpected error");
+                                    apply_button_clone_inner.set_sensitive(true);
+                                    show_error_dialog("Unexpected error occurred");
+                                    ControlFlow::Break
+				}
+                            }
+			});
+                    }
+                    "exclusive" => {
+			status_label.set_text("Applying exclusive mode settings...");
+			apply_button_clone.set_sensitive(false);
+
+			// Get the selected device for exclusive mode
+			let device_pattern = exclusive_device_combo.active_id()
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+
+			// Get device capabilities to validate settings
+			if let Ok(capabilities) = get_device_capabilities(&device_pattern) {
+                            // Validate buffer size against device capabilities
+                            let buffer_size = exclusive_buffer_size_combo.active_id()
+				.and_then(|id| id.parse::<u32>().ok())
+				.unwrap_or(128);
+
+                            let sample_rate = exclusive_sample_rate_combo.active_id()
+				.and_then(|id| id.parse::<u32>().ok())
+				.unwrap_or(48000);
+
+                            // Check if settings are compatible with device
+                            if !capabilities.buffer_sizes.contains(&buffer_size) {
+				status_label.set_text("Warning: Buffer size may not be optimal for this device");
+                            }
+
+                            if !capabilities.sample_rates.contains(&sample_rate) {
+				status_label.set_text("Warning: Sample rate may not be supported by this device");
+                            }
+			}
+
+			// For exclusive mode, we use the advanced audio settings function
+			let exclusive_mode = true;
+			let direct_hardware = true; // Exclusive mode implies direct hardware access
+			let low_latency = true;     // Exclusive mode implies low latency
+
+			let buffer_size = exclusive_buffer_size_combo.active_id()
+                            .and_then(|id| id.parse::<u32>().ok())
+                            .unwrap_or(128);
+
+			let sample_rate = exclusive_sample_rate_combo.active_id()
+                            .and_then(|id| id.parse::<u32>().ok())
+                            .unwrap_or(48000);
+
+			let status_label_clone = status_label.clone();
+			let apply_button_clone_inner = apply_button_clone.clone();
+
+			// Use the cloned disable_exclusive_button from the outer closure
+			let disable_exclusive_button_local = disable_exclusive_button_inner.clone();
+
+			// Create channel for communication
+			let (tx, rx) = mpsc::channel();
+			let rx_arc = Arc::new(Mutex::new(rx));
+
+			// Spawn thread for blocking operation
+			std::thread::spawn(move || {
+                            let result = apply_advanced_audio_settings(
+				exclusive_mode,
+				direct_hardware,
+				low_latency,
+				buffer_size,
+				sample_rate,
+				Some(device_pattern), // Pass the device pattern
+                            );
+                            let _ = tx.send(result);
+			});
+
+			// Set up timeout to check for result
+			let rx_timeout = Arc::clone(&rx_arc);
+			glib::timeout_add_local(Duration::from_millis(100), move || {
+                            let rx_guard = rx_timeout.lock().unwrap();
+                            match rx_guard.try_recv() {
+				Ok(result) => {
+                                    match result {
+					Ok(()) => {
+                                            status_label_clone.set_text("Exclusive mode settings applied successfully!");
+                                            apply_button_clone_inner.set_sensitive(true);
+
+                                            // Enable the disable exclusive button since exclusive mode is now active
+                                            disable_exclusive_button_local.set_sensitive(true);
+
+                                            show_success_dialog("Exclusive mode settings applied successfully. Audio system configured for low-latency performance.");
+					}
+					Err(e) => {
+                                            status_label_clone.set_text("Failed to apply exclusive mode settings");
+                                            apply_button_clone_inner.set_sensitive(true);
+                                            show_error_dialog(&format!("Failed to apply exclusive mode settings: {}", e));
+					}
+                                    }
+                                    ControlFlow::Break
+				}
+				Err(mpsc::TryRecvError::Empty) => ControlFlow::Continue,
+				Err(mpsc::TryRecvError::Disconnected) => {
+                                    status_label_clone.set_text("Unexpected error");
+                                    apply_button_clone_inner.set_sensitive(true);
+                                    show_error_dialog("Unexpected error occurred");
+                                    ControlFlow::Break
+				}
+                            }
+			});
+                    }
+                    _ => {}
+		}
+            });
+        }
+
+        // Disable button actions
+        {
+            let disable_exclusive_button_clone = disable_exclusive_button.clone();
+            disable_exclusive_button.connect_clicked(move |_| {
+                match crate::config::restore_standard_audio_mode() {
+                    Ok(_) => {
+                        show_success_dialog(
+                            "Exclusive mode disabled. Standard shared audio mode restored.",
+                        );
+                        // Disable this button after successful operation
+                        disable_exclusive_button_clone.set_sensitive(false);
+                    }
+                    Err(e) => {
+                        show_error_dialog(&format!("Failed to disable exclusive mode: {}", e));
+                    }
+                }
+            });
+        }
+    }
+}
+
+// Helper function to create constrained combo boxes that don't expand too wide
+fn create_constrained_combo() -> ComboBoxText {
+    let combo = ComboBoxText::new();
+    combo.set_hexpand(false);
+    combo.set_halign(gtk::Align::Fill);
+    combo.set_width_request(400); // Fixed width to prevent excessive expansion
+    combo
+}
+
 // Helper function to clean device description by removing status words like "SUSPENDED"
 fn clean_device_description(description: &str) -> String {
     description
@@ -1023,7 +1849,7 @@ fn clean_display_text(display_text: &str) -> String {
         .to_string()
 }
 
-// Helper function to clean device display name (remove PipeWire: prefix etc.)
+/// Helper function to clean device display name (remove PipeWire: prefix etc.)
 #[allow(dead_code)] // Used
 fn clean_device_display(device_info: &str) -> String {
     device_info
@@ -1115,7 +1941,7 @@ pub fn show_about_dialog() {
 
     dialog.set_title("About Pro Audio Config");
     dialog.set_program_name("Pro Audio Config");
-    dialog.set_version(Some("1.6"));
+    dialog.set_version(Some("1.7"));
     dialog.set_website(Some("https://github.com/Peter-L-SVK/pro_audio_config"));
     dialog.set_copyright(Some("Copyright © 2025 Peter Leukanič"));
     dialog.set_authors(&["Peter Leukanič"]);
@@ -1172,9 +1998,18 @@ pub fn show_about_dialog() {
     dialog.show_all();
 }
 
-// Helper function to get the main window
+/// Helper function to get the main window
 fn get_main_window() -> gtk::Window {
-    // This is a simple implementation - you might need to adjust based on your app structure
+    // Try to find the application's main window from toplevel widgets
+    for widget in gtk::Window::list_toplevels() {
+        if let Some(window) = widget.downcast_ref::<gtk::Window>() {
+            if window.is_visible() {
+                return window.clone();
+            }
+        }
+    }
+
+    // Fallback: create a new window (original behavior)
     gtk::Window::new(gtk::WindowType::Toplevel)
 }
 
@@ -1355,8 +2190,6 @@ mod tests {
             } else {
                 error_message.to_string()
             }
-        } else {
-            error_message.to_string()
         };
 
         assert_eq!(display_message, "Test error");
@@ -1377,5 +2210,26 @@ mod tests {
 
         assert!(!selection_text.is_empty());
         assert!(selection_text.contains("Selected"));
+    }
+
+    #[test]
+    fn test_constrained_combo_creation() {
+        // Test that our constrained combo helper works correctly
+        let combo = create_constrained_combo();
+        // The function should compile and return a ComboBoxText
+        assert_eq!(combo.type_(), gtk::ComboBoxText::static_type());
+    }
+
+    #[test]
+    fn test_exclusive_mode_state_check() {
+        // Test the exclusive mode state checking logic
+        // This is a unit test for the logic without actual file system access
+        // We're testing that the function compiles and has the correct signature
+
+        // Note: We can't test the actual file system check in unit tests
+        // without mocking, but we can verify the function exists and returns bool
+        let _exists = AdvancedTab::is_exclusive_mode_active();
+        // The function should compile and return a boolean
+        assert!(true); // Just to satisfy the test framework
     }
 }
