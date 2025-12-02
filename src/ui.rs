@@ -88,6 +88,18 @@ pub struct AdvancedTab {
     pub exclusive_buffer_size_combo: ComboBoxText,
     pub latency_label: Label,
 
+    // Professional settings
+    pub pro_settings_frame: Frame,
+    pub min_buffer_combo: ComboBoxText,
+    pub max_buffer_combo: ComboBoxText,
+    pub thread_priority_combo: ComboBoxText,
+    pub memory_lock_checkbox: CheckButton,
+    pub prevent_suspend_checkbox: CheckButton,
+    pub disable_remixing_checkbox: CheckButton,
+    pub disable_resampling_checkbox: CheckButton,
+    pub resampler_combo: ComboBoxText,
+    pub clock_source_combo: ComboBoxText,
+
     pub available_devices: Vec<AudioDevice>,
     pub current_default_device: Arc<Mutex<String>>,
 }
@@ -1160,6 +1172,128 @@ impl AdvancedTab {
         global_settings_box.pack_start(&global_buffer_size_label, false, false, 0);
         global_settings_box.pack_start(&buffer_size_combo, false, false, 0);
 
+        // ===== PROFESSIONAL SETTINGS SECTION (NEW) =====
+        let (pro_settings_frame, pro_settings_box) = create_section_box("Professional Settings");
+        let pro_frame_clone = pro_settings_frame.clone();
+
+        let pro_info_label = Label::new(Some(
+            "Advanced settings for studio and professional audio work. Use with caution.",
+        ));
+        pro_info_label.set_halign(gtk::Align::Start);
+        pro_info_label.set_line_wrap(true);
+
+        // Buffer size range (min/max)
+        let buffer_range_label = Label::new(Some("Buffer Size Range (min - max):"));
+        buffer_range_label.set_halign(gtk::Align::Start);
+
+        let buffer_range_box = GtkBox::new(Orientation::Horizontal, 6);
+        buffer_range_box.set_halign(gtk::Align::Start);
+
+        let min_buffer_combo = create_constrained_combo();
+        min_buffer_combo.set_width_request(180);
+        Self::populate_combo_box(
+            &min_buffer_combo,
+            &[
+                (64, "64 samples (1.3ms @48kHz)"),
+                (128, "128 samples (2.7ms @48kHz)"),
+                (256, "256 samples (5.3ms @48kHz)"),
+                (512, "512 samples (10.7ms @48kHz)"),
+                (1024, "1024 samples (21.3ms @48kHz)"),
+            ],
+        );
+        min_buffer_combo.set_active_id(Some("128"));
+
+        let range_separator = Label::new(Some("to"));
+        range_separator.set_halign(gtk::Align::Center);
+
+        let max_buffer_combo = create_constrained_combo();
+        max_buffer_combo.set_width_request(180);
+        Self::populate_combo_box(
+            &max_buffer_combo,
+            &[
+                (512, "512 samples (10.7ms @48kHz)"),
+                (1024, "1024 samples (21.3ms @48kHz)"),
+                (2048, "2048 samples (42.7ms @48kHz)"),
+                (4096, "4096 samples (85.3ms @48kHz)"),
+                (8192, "8192 samples (170.7ms @48kHz)"),
+            ],
+        );
+        max_buffer_combo.set_active_id(Some("2048"));
+
+        buffer_range_box.pack_start(&min_buffer_combo, false, false, 0);
+        buffer_range_box.pack_start(&range_separator, false, false, 6);
+        buffer_range_box.pack_start(&max_buffer_combo, false, false, 0);
+
+        // Thread priority
+        let thread_priority_label = Label::new(Some("Real-time Thread Priority:"));
+        thread_priority_label.set_halign(gtk::Align::Start);
+
+        let thread_priority_combo = create_constrained_combo();
+        thread_priority_combo.append(Some("normal"), "Normal Priority (-11 nice, 88 RT)");
+        thread_priority_combo.append(Some("high"), "High Priority (-15 nice, 90 RT)");
+        thread_priority_combo.append(Some("realtime"), "Real-time Priority (-20 nice, 99 RT)");
+        thread_priority_combo.set_active_id(Some("high"));
+
+        // Memory and performance options
+        let memory_lock_checkbox = CheckButton::with_label("Lock audio memory in RAM (mlock)");
+        let prevent_suspend_checkbox = CheckButton::with_label("Prevent audio device suspend");
+        let disable_remixing_checkbox = CheckButton::with_label("Disable channel remixing");
+        let disable_resampling_checkbox = CheckButton::with_label("Disable automatic resampling");
+
+        memory_lock_checkbox.set_tooltip_text(Some("Prevents audio buffers from being swapped to disk, reducing latency but using more RAM"));
+        prevent_suspend_checkbox.set_tooltip_text(Some(
+            "Keeps audio devices active even when idle, reducing wake-up latency",
+        ));
+        disable_remixing_checkbox.set_tooltip_text(Some(
+            "Prevents automatic channel remixing, maintains original channel layout",
+        ));
+        disable_resampling_checkbox.set_tooltip_text(Some(
+            "Prevents automatic sample rate conversion, may cause issues if rates don't match",
+        ));
+
+        // Resampler quality
+        let resampler_label = Label::new(Some("Resampler Quality (if resampling is needed):"));
+        resampler_label.set_halign(gtk::Align::Start);
+
+        let resampler_combo = create_constrained_combo();
+        resampler_combo.append(Some("fastest"), "Fastest (lowest quality, lowest CPU)");
+        resampler_combo.append(Some("low"), "Low quality");
+        resampler_combo.append(Some("medium"), "Medium (balanced)");
+        resampler_combo.append(Some("high"), "High quality");
+        resampler_combo.append(Some("highest"), "Highest (best quality, highest CPU)");
+        resampler_combo.set_active_id(Some("high"));
+
+        // Clock source
+        let clock_source_label = Label::new(Some("Clock Source:"));
+        clock_source_label.set_halign(gtk::Align::Start);
+
+        let clock_source_combo = create_constrained_combo();
+        clock_source_combo.append(Some("default"), "Default (system clock)");
+        clock_source_combo.append(Some("monotonic"), "Monotonic (more stable)");
+        clock_source_combo.append(Some("realtime"), "Real-time (most accurate)");
+        clock_source_combo.set_active_id(Some("monotonic"));
+
+        // Add to professional settings box
+        pro_settings_box.pack_start(&pro_info_label, false, false, 0);
+        pro_settings_box.pack_start(&buffer_range_label, false, false, 6);
+        pro_settings_box.pack_start(&buffer_range_box, false, false, 0);
+        pro_settings_box.pack_start(&thread_priority_label, false, false, 6);
+        pro_settings_box.pack_start(&thread_priority_combo, false, false, 0);
+        pro_settings_box.pack_start(&clock_source_label, false, false, 6);
+        pro_settings_box.pack_start(&clock_source_combo, false, false, 0);
+
+        // Create a horizontal box for checkboxes
+        let checkbox_grid = GtkBox::new(Orientation::Vertical, 4);
+        checkbox_grid.set_margin_start(4);
+        checkbox_grid.pack_start(&memory_lock_checkbox, false, false, 0);
+        checkbox_grid.pack_start(&prevent_suspend_checkbox, false, false, 0);
+        checkbox_grid.pack_start(&disable_remixing_checkbox, false, false, 0);
+        checkbox_grid.pack_start(&disable_resampling_checkbox, false, false, 0);
+
+        pro_settings_box.pack_start(&checkbox_grid, false, false, 6);
+        pro_settings_box.pack_start(&resampler_label, false, false, 6);
+        pro_settings_box.pack_start(&resampler_combo, false, false, 0);
+
         // ===== EXCLUSIVE MODE SETTINGS SECTION =====
         let (exclusive_settings_frame, exclusive_settings_box) =
             create_section_box("Exclusive Mode Settings");
@@ -1243,10 +1377,12 @@ impl AdvancedTab {
 
         // Check system state and set sensitivity accordingly
         let is_exclusive_active = Self::is_exclusive_mode_active();
+        println!("DEBUG: Exclusive mode active: {}", is_exclusive_active);
+        println!("DEBUG: Disable button sensitivity: {}", is_exclusive_active);
         disable_exclusive_button.set_sensitive(is_exclusive_active);
 
         let info_label = Label::new(Some(
-            "Note: Administrator privileges will be requested to apply system audio configuration",
+            "Note: Professional settings may require administrator privileges and can affect system stability",
         ));
         info_label.set_line_wrap(true);
 
@@ -1258,11 +1394,13 @@ impl AdvancedTab {
         // ===== ASSEMBLE ADVANCED TAB =====
         container.pack_start(&mode_frame, false, false, 0);
         container.pack_start(&global_settings_frame, false, false, 0);
+        container.pack_start(&pro_settings_frame, false, false, 0);
         container.pack_start(&exclusive_settings_frame, false, false, 0);
         container.pack_start(&actions_frame, false, false, 0);
 
-        // Hide both frames initially using clones (before they're moved into struct)
+        // Hide frames initially using clones (before they're moved into struct)
         global_frame_clone.hide();
+        pro_frame_clone.hide();
         exclusive_frame_clone.hide();
 
         // Create the tab instance
@@ -1273,7 +1411,7 @@ impl AdvancedTab {
             exclusive_settings_frame,
             status_label,
             apply_button,
-            disable_exclusive_button, // Added missing field
+            disable_exclusive_button,
             sample_rate_combo,
             bit_depth_combo,
             buffer_size_combo,
@@ -1285,6 +1423,17 @@ impl AdvancedTab {
             exclusive_bit_depth_combo,
             exclusive_buffer_size_combo,
             latency_label,
+            // Professional settings fields
+            pro_settings_frame,
+            min_buffer_combo,
+            max_buffer_combo,
+            thread_priority_combo,
+            memory_lock_checkbox,
+            prevent_suspend_checkbox,
+            disable_remixing_checkbox,
+            disable_resampling_checkbox,
+            resampler_combo,
+            clock_source_combo,
             available_devices: Vec::new(),
             current_default_device: Arc::new(Mutex::new(String::new())),
         };
@@ -1295,6 +1444,7 @@ impl AdvancedTab {
             // Use the frames stored in the struct (accessible via tab_clone)
             // Show only the global settings initially (default mode)
             tab_clone.global_settings_frame.show();
+            tab_clone.pro_settings_frame.show(); // Show professional settings too for global mode
             // Hide the exclusive settings using the clone from the tab
             tab_clone.exclusive_settings_frame.hide();
 
@@ -1526,6 +1676,7 @@ impl AdvancedTab {
         {
             let status_label = status_label.clone();
             let global_settings_frame = global_settings_frame.clone();
+            let pro_settings_frame = self.pro_settings_frame.clone(); // Add this
             let exclusive_settings_frame = exclusive_settings_frame.clone();
             let apply_button = apply_button.clone();
 
@@ -1536,11 +1687,13 @@ impl AdvancedTab {
                     match mode.as_str() {
                         "global" => {
                             global_settings_frame.show();
+                            pro_settings_frame.show(); // Show professional settings
                             exclusive_settings_frame.hide();
-                            apply_button.set_label("Apply Global System Settings");
+                            apply_button.set_label("Apply Advanced Global Settings"); // Updated label
                         }
                         "exclusive" => {
                             global_settings_frame.hide();
+                            pro_settings_frame.hide(); // Hide professional settings
                             exclusive_settings_frame.show();
                             apply_button.set_label("Apply Exclusive Mode Settings");
                         }
@@ -1609,6 +1762,17 @@ impl AdvancedTab {
             let buffer_size_combo = buffer_size_combo.clone();
             let device_combo = device_combo.clone();
 
+            // Professional settings
+            let min_buffer_combo = self.min_buffer_combo.clone();
+            let max_buffer_combo = self.max_buffer_combo.clone();
+            let thread_priority_combo = self.thread_priority_combo.clone();
+            let memory_lock_checkbox = self.memory_lock_checkbox.clone();
+            let prevent_suspend_checkbox = self.prevent_suspend_checkbox.clone();
+            let disable_remixing_checkbox = self.disable_remixing_checkbox.clone();
+            let disable_resampling_checkbox = self.disable_resampling_checkbox.clone();
+            let resampler_combo = self.resampler_combo.clone();
+            let clock_source_combo = self.clock_source_combo.clone();
+
             let exclusive_device_combo = exclusive_device_combo.clone();
             let exclusive_sample_rate_combo = exclusive_sample_rate_combo.clone();
             let exclusive_buffer_size_combo = exclusive_buffer_size_combo.clone();
@@ -1621,30 +1785,56 @@ impl AdvancedTab {
 
             apply_button.connect_clicked(move |_| {
 		let mode = config_mode_combo.active_id()
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "global".to_string());
+		    .map(|id| id.to_string())
+		    .unwrap_or_else(|| "global".to_string());
 
 		match mode.as_str() {
-                    "global" => {
-			status_label.set_text("Applying global system settings...");
+		    "global" => {
+			status_label.set_text("Applying advanced global system settings...");
 			apply_button_clone.set_sensitive(false);
 
 			let device_id = device_combo.active_id()
-                            .map(|id| id.to_string())
-                            .unwrap_or_else(|| "default".to_string());
+			    .map(|id| id.to_string())
+			    .unwrap_or_else(|| "default".to_string());
 
 			let settings = AudioSettings {
-                            sample_rate: sample_rate_combo.active_id()
+			    sample_rate: sample_rate_combo.active_id()
 				.and_then(|id| id.parse::<u32>().ok())
 				.unwrap_or(48000),
-                            bit_depth: bit_depth_combo.active_id()
+			    bit_depth: bit_depth_combo.active_id()
 				.and_then(|id| id.parse::<u32>().ok())
 				.unwrap_or(24),
-                            buffer_size: buffer_size_combo.active_id()
+			    buffer_size: buffer_size_combo.active_id()
 				.and_then(|id| id.parse::<u32>().ok())
 				.unwrap_or(512),
-                            device_id,
+			    device_id,
 			};
+
+			// Get professional settings
+			let min_buffer = min_buffer_combo.active_id()
+			    .and_then(|id| id.parse::<u32>().ok())
+			    .unwrap_or(128);
+
+			let max_buffer = max_buffer_combo.active_id()
+			    .and_then(|id| id.parse::<u32>().ok())
+			    .unwrap_or(2048);
+
+			let thread_priority = thread_priority_combo.active_id()
+			    .map(|id| id.to_string())
+			    .unwrap_or_else(|| "high".to_string());
+
+			let memory_lock = memory_lock_checkbox.is_active();
+			let prevent_suspend = prevent_suspend_checkbox.is_active();
+			let disable_remixing = disable_remixing_checkbox.is_active();
+			let disable_resampling = disable_resampling_checkbox.is_active();
+
+			let resampler_quality = resampler_combo.active_id()
+			    .map(|id| id.to_string())
+			    .unwrap_or_else(|| "high".to_string());
+
+			let clock_source = clock_source_combo.active_id()
+			    .map(|id| id.to_string())
+			    .unwrap_or_else(|| "monotonic".to_string());
 
 			let status_label_clone = status_label.clone();
 			let apply_button_clone_inner = apply_button_clone.clone();
@@ -1655,40 +1845,52 @@ impl AdvancedTab {
 
 			// Spawn thread for blocking operation
 			std::thread::spawn(move || {
-                            let result = apply_output_audio_settings_with_auth_blocking(settings);
-                            let _ = tx.send(result);
+			    let result = crate::config::apply_advanced_professional_settings(
+				&settings,
+				true, // Global mode is always system-wide
+				min_buffer,
+				max_buffer,
+				&thread_priority,
+				memory_lock,
+				prevent_suspend,
+				disable_remixing,
+				disable_resampling,
+				&resampler_quality,
+				&clock_source,
+			    );
+			    let _ = tx.send(result);
 			});
 
 			// Set up timeout to check for result
 			let rx_timeout = Arc::clone(&rx_arc);
 			glib::timeout_add_local(Duration::from_millis(100), move || {
-                            let rx_guard = rx_timeout.lock().unwrap();
-                            match rx_guard.try_recv() {
+			    let rx_guard = rx_timeout.lock().unwrap();
+			    match rx_guard.try_recv() {
 				Ok(result) => {
-                                    match result {
+				    match result {
 					Ok(()) => {
-                                            status_label_clone.set_text("Global settings applied successfully!");
+					    status_label_clone.set_text("Global settings applied successfully!");
                                             apply_button_clone_inner.set_sensitive(true);
                                             show_success_dialog("Global audio settings applied successfully. All applications will use these settings.");
 					}
 					Err(e) => {
-                                            status_label_clone.set_text("Failed to apply global settings");
-                                            apply_button_clone_inner.set_sensitive(true);
-                                            show_error_dialog(&format!("Failed to apply global settings: {}", e));
+					    status_label_clone.set_text("Failed to apply advanced settings");
+					    apply_button_clone_inner.set_sensitive(true);
+					    show_error_dialog(&format!("Failed to apply advanced settings: {}", e));
 					}
-                                    }
-                                    ControlFlow::Break
+				    }
+				    ControlFlow::Break
 				}
 				Err(mpsc::TryRecvError::Empty) => ControlFlow::Continue,
 				Err(mpsc::TryRecvError::Disconnected) => {
-                                    status_label_clone.set_text("Unexpected error");
-                                    apply_button_clone_inner.set_sensitive(true);
-                                    show_error_dialog("Unexpected error occurred");
-                                    ControlFlow::Break
+				    status_label_clone.set_text("Unexpected error");
+				    apply_button_clone_inner.set_sensitive(true);
+				    show_error_dialog("Unexpected error occurred");
+				    ControlFlow::Break
 				}
-                            }
+			    }
 			});
-                    }
+		    }
                     "exclusive" => {
 			status_label.set_text("Applying exclusive mode settings...");
 			apply_button_clone.set_sensitive(false);

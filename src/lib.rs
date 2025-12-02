@@ -45,6 +45,7 @@ pub use config::{
     check_audio_services,
     check_exclusive_mode_status,
     cleanup_config_files,
+    restore_standard_audio_mode,
     update_audio_settings,
 };
 

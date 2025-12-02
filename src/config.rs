@@ -483,6 +483,9 @@ context.properties = {{
     # Disable rate/quantum checking to ensure our settings are applied
     settings.check-quantum = false
     settings.check-rate = false
+    # Force settings to be used
+    default.clock.force-quantum = {}
+    default.clock.force-rate = {}
 }}
 
 context.modules = [
@@ -497,7 +500,11 @@ context.modules = [
         flags = [ ifexists nofail ]
     }}
 ]"#,
-        settings.sample_rate, settings.buffer_size, settings.sample_rate
+        settings.sample_rate,
+        settings.buffer_size,
+        settings.sample_rate,
+        settings.buffer_size,
+        settings.sample_rate
     );
 
     // Try multiple standard locations - use higher number for higher priority
@@ -637,6 +644,241 @@ fn cleanup_user_pipewire_configs() -> Result<(), String> {
     Ok(())
 }
 
+/// Creates an ADVANCED PipeWire configuration fragment for professional use
+pub fn create_advanced_pipewire_fragment(
+    settings: &AudioSettings,
+    system_wide: bool,
+    min_buffer: u32,
+    max_buffer: u32,
+    thread_priority: &str,
+    memory_lock: bool,
+    prevent_suspend: bool,
+    disable_remixing: bool,
+    disable_resampling: bool,
+    resampler_quality: &str,
+    clock_source: &str,
+) -> Result<(), String> {
+    // Map thread priority
+    let (nice_level, rt_prio) = match thread_priority {
+        "normal" => (-11, 88),
+        "high" => (-15, 90),
+        "realtime" => (-20, 99),
+        _ => (-15, 90),
+    };
+
+    // Override quantum-floor AND set force-quantum
+    let config_content = format!(
+        r#"# Pro Audio Config - Quantum Floor Override
+# This OVERRIDES default.clock.quantum-floor = 4
+
+context.properties = {{
+    # CORE SETTINGS - MUST override quantum-floor
+    default.clock.rate = {}
+    default.clock.quantum = {}
+    default.clock.allowed-rates = [ {} ]
+
+    # CRITICAL: Override the quantum-floor that's blocking our settings
+    default.clock.quantum-floor = {}
+    default.clock.min-quantum = {}
+    default.clock.max-quantum = {}
+    default.clock.quantum-limit = {}
+
+    # Force settings (if supported by your PipeWire version)
+    default.clock.force-quantum = {}
+    default.clock.force-rate = {}
+
+    # Clock source
+    default.clock.source = "{}"
+
+    # DISABLE all quantum checking
+    settings.check-quantum = false
+    settings.check-rate = false
+    settings.check-quantum-limit = false
+    settings.check-quantum-floor = false
+
+    # Memory settings
+    mem.warn-mlock = {}
+    mem.allow-mlock = {}
+
+    # Resampler
+    resample.quality = "{}"
+
+    # Thread settings
+    cpu.zero.denormals = true
+
+    # Session
+    session.suspend-timeout-seconds = {}
+
+    # Stream settings
+    stream.dont-remix = {}
+    stream.dont-resample = {}
+
+    # Additional overrides
+    link.max-buffers = 64
+    core.daemon = true
+
+    # DEBUG: Add properties to verify our config is loaded
+    pro-audio-config.rate = {}
+    pro-audio-config.quantum = {}
+    pro-audio-config.version = "1.8"
+}}
+
+# Real-time module
+context.modules = [
+    {{
+        name = libpipewire-module-rt
+        args = {{
+            nice.level = {}
+            rt.prio = {}
+            rt.time.soft = 100000
+            rt.time.hard = 100000
+        }}
+        flags = [ ifexists nofail ]
+    }}
+]
+
+# Debug object to verify settings
+context.objects = [
+    {{
+        factory = adapter
+        args = {{
+            factory.name     = support.null-audio-sink
+            node.name        = "quantum-test-{}"
+            node.description = "Quantum Test: {} samples @ {}Hz"
+            media.class      = "Audio/Sink"
+            audio.rate       = {}
+            audio.position   = [ FL, FR ]
+            audio.channels   = 2
+            audio.format     = "S{}LE"
+            # High priority to ensure it's visible
+            priority.session = 9999,
+            # Add our quantum to node properties
+            node.quantum = {},
+            node.lock-quantum = true
+        }}
+    }}
+]
+"#,
+        // Core settings
+        settings.sample_rate,
+        settings.buffer_size,
+        settings.sample_rate,
+        // QUANTUM FLOOR OVERRIDE - MUST be >= our quantum
+        settings.buffer_size,     // quantum-floor = our target
+        settings.buffer_size,     // min-quantum = our target
+        settings.buffer_size * 2, // max-quantum
+        settings.buffer_size * 4, // quantum-limit
+        // Force settings
+        settings.buffer_size, // force-quantum
+        settings.sample_rate, // force-rate
+        // Other settings
+        clock_source,
+        // Memory (inverted)
+        !memory_lock,
+        memory_lock,
+        // Resampler
+        resampler_quality,
+        // Session
+        if prevent_suspend { 0 } else { 5 },
+        // Stream
+        disable_remixing,
+        disable_resampling,
+        // Debug properties
+        settings.sample_rate,
+        settings.buffer_size,
+        // RT module
+        nice_level,
+        rt_prio,
+        // Debug object
+        settings.buffer_size,
+        settings.buffer_size,
+        settings.sample_rate,
+        settings.sample_rate,
+        settings.bit_depth,
+        settings.buffer_size,
+    );
+
+    // Use consistent String type for both branches
+    let config_path = if system_wide {
+        "/etc/pipewire/pipewire.conf.d/99-pro-audio-quantum-override.conf".to_string()
+    } else {
+        let username = whoami::username();
+        format!(
+            "/home/{}/.config/pipewire/pipewire.conf.d/99-pro-audio-quantum-override.conf",
+            username
+        )
+    };
+
+    // Clean FIRST
+    cleanup_quantum_configs(system_wide)?;
+
+    // Write the quantum-override config
+    write_config_with_privileges(&config_path, &config_content)?;
+
+    println!("✓ Quantum override config created: {}", config_path);
+    println!("  Overriding quantum-floor with: {}", settings.buffer_size);
+
+    Ok(())
+}
+
+/// Clean up quantum-related configs
+fn cleanup_quantum_configs(system_wide: bool) -> Result<(), String> {
+    println!("Cleaning quantum configs...");
+
+    let username = whoami::username();
+
+    // Use consistent Vec<String> type
+    let patterns: Vec<String> = if system_wide {
+        vec![
+            "/etc/pipewire/pipewire.conf.d/*pro-audio*.conf".to_string(),
+            "/etc/pipewire/pipewire.conf.d/*quantum*.conf".to_string(),
+        ]
+    } else {
+        vec![
+            format!(
+                "/home/{}/.config/pipewire/pipewire.conf.d/*pro-audio*.conf",
+                username
+            ),
+            format!(
+                "/home/{}/.config/pipewire/pipewire.conf.d/*quantum*.conf",
+                username
+            ),
+        ]
+    };
+
+    for pattern in patterns {
+        let _ = Command::new("sh")
+            .args(["-c", &format!("rm -f {}", pattern)])
+            .status();
+    }
+
+    Ok(())
+}
+
+/// Clean up basic pipewire config files when using advanced mode
+fn cleanup_basic_pipewire_configs(dir: &str) -> Result<(), String> {
+    let basic_configs = [
+        format!("{}/99-pro-audio-high-priority.conf", dir), // Basic Output/Input tab config
+        format!("{}/99-pro-audio.conf", dir),
+        format!("{}/50-pro-audio.conf", dir),
+    ];
+
+    for config in &basic_configs {
+        if Path::new(config).exists() {
+            if config.starts_with("/etc/") {
+                // System path - need privileges
+                let _ = execute_with_privileges("rm", &["-f", config]);
+            } else {
+                // User path - no privileges needed
+                let _ = fs::remove_file(config);
+            }
+            println!("✓ Removed basic config: {}", config);
+        }
+    }
+
+    Ok(())
+}
+
 /// Creates a WirePlumber configuration file (updated format for versions >= 0.5)
 fn create_wireplumber_config_new(
     settings: &AudioSettings,
@@ -644,7 +886,6 @@ fn create_wireplumber_config_new(
 ) -> Result<(), String> {
     let username = whoami::username();
 
-    // Use consistent types - both vectors should contain String
     let config_dirs = if system_wide {
         vec!["/etc/wireplumber/wireplumber.conf.d".to_string()]
     } else {
@@ -699,11 +940,96 @@ fn create_wireplumber_config_new(
     Err("No WirePlumber config directory found".to_string())
 }
 
+/// Create WirePlumber configuration for hardware device rules
+/// WirePlumber handles device-specific settings (alsa_monitor.rules)
+fn create_wireplumber_device_config(
+    settings: &AudioSettings,
+    system_wide: bool,
+    min_buffer: u32,
+    max_buffer: u32,
+    disable_remixing: bool,
+    disable_resampling: bool,
+) -> Result<(), String> {
+    println!("Creating WirePlumber device configuration...");
+
+    let username = whoami::username();
+    let wireplumber_dirs = if system_wide {
+        vec!["/etc/wireplumber/wireplumber.conf.d".to_string()]
+    } else {
+        vec![format!(
+            "/home/{}/.config/wireplumber/wireplumber.conf.d",
+            username
+        )]
+    };
+
+    // WirePlumber uses JSON for its configuration (version 0.5+)
+    let wireplumber_config = format!(
+        r#"{{
+  "alsa-monitor": {{
+    "rules": [
+      {{
+        "matches": [
+          {{
+            "node.name": "~alsa.*"
+          }}
+        ],
+        "actions": {{
+          "update-props": {{
+            "api.alsa.period-size": {},
+            "api.alsa.period-num": 2,
+            "api.alsa.headroom": 4096,
+            "api.alsa.disable-batch": true,
+            "api.alsa.use-acp": true,
+            "api.alsa.disable-mmap": false,
+            "api.alsa.disable-tsched": false,
+            "audio.format": "S{}LE",
+            "audio.rate": {},
+            "audio.allowed-rates": [ {} ],
+            "audio.channels": 2,
+            "audio.position": [ "FL", "FR" ],
+            "priority.driver": 200,
+            "priority.session": 200,
+            "device.suspend-on-idle": false,
+            "node.description": "Pro Audio Device (Configured)"
+          }}
+        }}
+      }}
+    ]
+  }}
+}}"#,
+        settings.buffer_size, settings.bit_depth, settings.sample_rate, settings.sample_rate
+    );
+
+    for dir in &wireplumber_dirs {
+        let config_path = format!("{}/99-pro-audio-devices.conf", dir);
+
+        // Create directory if needed
+        if let Err(e) = create_dir_all_with_privileges(&dir) {
+            println!(
+                "Note: Could not create WirePlumber directory {}: {}",
+                dir, e
+            );
+            continue;
+        }
+
+        // Write the WirePlumber config
+        if let Err(e) = write_config_with_privileges(&config_path, &wireplumber_config) {
+            println!("Failed to write WirePlumber config {}: {}", config_path, e);
+            continue;
+        }
+
+        println!("✓ WirePlumber device config created: {}", config_path);
+        return Ok(());
+    }
+
+    println!("Note: Could not create WirePlumber config, using defaults");
+    Ok(())
+}
+
 /// Modifies the main PipeWire configuration file as a fallback
 fn modify_main_pipewire_config(settings: &AudioSettings, system_wide: bool) -> Result<(), String> {
     let username = whoami::username();
 
-    // Use consistent types - both vectors should contain String
     let config_paths = if system_wide {
         vec!["/etc/pipewire/pipewire.conf".to_string()]
     } else {
@@ -781,6 +1107,100 @@ fn modify_main_pipewire_config(settings: &AudioSettings, system_wide: bool) -> R
     Err("No main PipeWire config file found".to_string())
 }
 
+/// Modify the main pipewire.conf to change quantum-floor
+fn modify_main_pipewire_quantum_floor(
+    settings: &AudioSettings,
+    system_wide: bool,
+) -> Result<(), String> {
+    println!("=== NUCLEAR OPTION: Modifying main pipewire.conf ===");
+
+    // Use consistent String type
+    let main_conf_path = if system_wide {
+        "/etc/pipewire/pipewire.conf".to_string()
+    } else {
+        let username = whoami::username();
+        format!("/home/{}/.config/pipewire/pipewire.conf", username)
+    };
+
+    if !Path::new(&main_conf_path).exists() {
+        println!("Main config not found at: {}", main_conf_path);
+        return Ok(()); // Not an error, just skip
+    }
+
+    // Read the file
+    let content = fs::read_to_string(&main_conf_path)
+        .map_err(|e| format!("Failed to read {}: {}", main_conf_path, e))?;
+
+    // Replace or add quantum-floor setting
+    let mut updated = false;
+    let mut new_content = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Look for quantum-floor setting
+        if trimmed.contains("default.clock.quantum-floor") {
+            // Replace it with our value
+            new_content.push_str(&format!(
+                "    default.clock.quantum-floor = {}\n",
+                settings.buffer_size
+            ));
+            println!("✓ Replaced quantum-floor in main config");
+            updated = true;
+        } else if trimmed.contains("default.clock.min-quantum") {
+            // Also update min-quantum
+            new_content.push_str(&format!(
+                "    default.clock.min-quantum = {}\n",
+                settings.buffer_size
+            ));
+            updated = true;
+        } else {
+            new_content.push_str(line);
+            new_content.push('\n');
+        }
+    }
+
+    // If didn't find quantum-floor, adds it
+    if !updated {
+        // Find where to insert it (after other quantum settings)
+        let mut final_content = String::new();
+        let mut inserted = false;
+
+        for line in content.lines() {
+            final_content.push_str(line);
+            final_content.push('\n');
+
+            // Insert after finding quantum settings section
+            if !inserted && line.trim().contains("default.clock.quantum") {
+                final_content.push_str(&format!(
+                    "    default.clock.quantum-floor = {}\n",
+                    settings.buffer_size
+                ));
+                final_content.push_str(&format!(
+                    "    default.clock.min-quantum = {}\n",
+                    settings.buffer_size
+                ));
+                inserted = true;
+                println!("✓ Added quantum-floor to main config");
+            }
+        }
+
+        new_content = final_content;
+    }
+
+    // Backup and write
+    let backup_path = format!("{}.backup-pro-audio", main_conf_path);
+    fs::copy(&main_conf_path, &backup_path).map_err(|e| format!("Failed to backup: {}", e))?;
+
+    fs::write(&main_conf_path, new_content).map_err(|e| format!("Failed to write: {}", e))?;
+
+    println!(
+        "✓ Modified main config: {} (backup: {})",
+        main_conf_path, backup_path
+    );
+    Ok(())
+}
+
 /// Verifies that the settings were actually applied
 fn verify_settings_applied(settings: &AudioSettings) -> Result<(), String> {
     println!("Verifying settings were applied...");
@@ -823,51 +1243,507 @@ fn verify_settings_applied(settings: &AudioSettings) -> Result<(), String> {
     Ok(())
 }
 
-pub fn debug_wireplumber_config() -> Result<(), String> {
-    println!("=== WirePlumber Debug Information ===");
+/// Apply advanced/professional audio settings with verification
+pub fn apply_advanced_professional_settings(
+    settings: &AudioSettings,
+    system_wide: bool,
+    min_buffer: u32,
+    max_buffer: u32,
+    thread_priority: &str,
+    memory_lock: bool,
+    prevent_suspend: bool,
+    disable_remixing: bool,
+    disable_resampling: bool,
+    resampler_quality: &str,
+    clock_source: &str,
+) -> Result<(), String> {
+    println!("=== QUANTUM FLOOR OVERRIDE ===");
+    println!(
+        "Target: {}Hz, {} samples",
+        settings.sample_rate, settings.buffer_size
+    );
+    println!("Fixing quantum-floor issue...");
 
-    // Check if WirePlumber is running
-    let status = Command::new("systemctl")
-        .args(["--user", "is-active", "wireplumber"])
-        .status()
-        .map_err(|e| format!("Failed to check WirePlumber status: {}", e))?;
+    // 1. NUCLEAR OPTION: Modify main pipewire.conf
+    modify_main_pipewire_quantum_floor(settings, system_wide)?;
 
-    if !status.success() {
-        return Err("WirePlumber is not running".to_string());
+    // 2. Create quantum-override config
+    create_advanced_pipewire_fragment(
+        settings,
+        system_wide,
+        min_buffer,
+        max_buffer,
+        thread_priority,
+        memory_lock,
+        prevent_suspend,
+        disable_remixing,
+        disable_resampling,
+        resampler_quality,
+        clock_source,
+    )?;
+
+    // 3. RESTART with verification
+    println!("\nRestarting with quantum verification...");
+    quantum_verified_restart(system_wide)?;
+
+    // 4. Verify
+    verify_quantum_applied(settings)
+}
+
+/// Restart with quantum verification
+fn quantum_verified_restart(system_wide: bool) -> Result<(), String> {
+    // Kill
+    let _ = Command::new("pkill").arg("-9").arg("pipewire").status();
+    let _ = Command::new("pkill").arg("-9").arg("wireplumber").status();
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Start
+    if system_wide {
+        let _ = Command::new("systemctl")
+            .args(["--user", "restart", "pipewire", "wireplumber"])
+            .status();
+    } else {
+        let _ = Command::new("pipewire").spawn();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let _ = Command::new("wireplumber").spawn();
     }
 
-    // Get and display WirePlumber version
-    match get_wireplumber_version() {
-        Ok(version) => println!("WirePlumber version: {}", version),
-        Err(e) => println!("Could not determine WirePlumber version: {}", e),
-    }
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    Ok(())
+}
 
-    // List config files WirePlumber is using
-    let _ = Command::new("wpctl").args(["status"]).status();
+/// Verify quantum was applied
+fn verify_quantum_applied(settings: &AudioSettings) -> Result<(), String> {
+    println!("\n=== QUANTUM VERIFICATION ===");
 
-    // Check config directory structure
-    let username = whoami::username();
-    let config_dirs = [
-        format!("/home/{}/.config/wireplumber", username),
-        "/etc/wireplumber".to_string(),
-    ];
+    // Check with pw-cli
+    match Command::new("pw-cli").args(["info", "0"]).output() {
+        Ok(output) => {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+            let mut found_quantum = None;
+            let mut found_rate = None;
 
-    for dir in &config_dirs {
-        println!("Checking directory: {}", dir);
-        if Path::new(dir).exists() {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    println!("  Found: {}", entry.path().display());
+            for line in output_str.lines() {
+                let trimmed = line.trim();
+                if trimmed.contains("default.clock.quantum") {
+                    println!("QUANTUM LINE: {}", trimmed);
+                    found_quantum = extract_number_from_line(trimmed);
+                }
+                if trimmed.contains("default.clock.rate") {
+                    println!("RATE LINE: {}", trimmed);
+                    found_rate = extract_number_from_line(trimmed);
                 }
             }
+
+            println!("\nRESULTS:");
+            println!("  Detected quantum: {:?}", found_quantum);
+            println!("  Detected rate: {:?}", found_rate);
+            println!("  Expected quantum: {}", settings.buffer_size);
+            println!("  Expected rate: {}", settings.sample_rate);
+
+            if found_quantum == Some(settings.buffer_size) {
+                println!(
+                    "✓ SUCCESS: Quantum correctly set to {}!",
+                    settings.buffer_size
+                );
+                return Ok(());
+            } else {
+                println!("⚠ FAILED: Quantum not set correctly");
+                println!(
+                    "  The quantum-floor in /usr/share/pipewire/pipewire.conf is likely still 4"
+                );
+                println!(
+                    "  Try: sudo sed -i 's/default.clock.quantum-floor = 4/default.clock.quantum-floor = {}/' /usr/share/pipewire/pipewire.conf",
+                    settings.buffer_size
+                );
+            }
+        }
+        Err(e) => {
+            println!("⚠ Could not run pw-cli: {}", e);
         }
     }
 
     Ok(())
 }
 
+/// Aggressive restart that kills everything and forces restart
+fn aggressive_restart_audio_services(system_wide: bool) -> Result<(), String> {
+    println!("=== AGGRESSIVE AUDIO SERVICE RESTART ===");
+
+    let username = whoami::username();
+
+    // Step 1: Kill all audio processes
+    println!("Step 1: Killing all audio processes...");
+    let _ = Command::new("pkill").arg("-9").arg("pipewire").status();
+    let _ = Command::new("pkill").arg("-9").arg("wireplumber").status();
+    let _ = Command::new("pkill").arg("-9").arg("pulseaudio").status();
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Step 2: Restart with systemd
+    println!("Step 2: Restarting with systemd...");
+    if system_wide {
+        let status = Command::new("sudo")
+            .args([
+                "-u",
+                &username,
+                "systemctl",
+                "--user",
+                "restart",
+                "pipewire",
+                "pipewire-pulse",
+                "wireplumber",
+            ])
+            .status()
+            .map_err(|e| format!("Failed to restart user services: {}", e))?;
+
+        if !status.success() {
+            println!("⚠ Systemd restart failed, trying manual restart...");
+        }
+    } else {
+        let _ = Command::new("systemctl")
+            .args([
+                "--user",
+                "restart",
+                "pipewire",
+                "pipewire-pulse",
+                "wireplumber",
+            ])
+            .status();
+    }
+
+    // Step 3: Start processes manually if needed
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    println!("Step 3: Checking if services are running...");
+    let mut attempts = 0;
+    let max_attempts = 10;
+
+    while attempts < max_attempts {
+        if check_if_services_are_running() {
+            println!(
+                "✓ Audio services are running (attempt {}/{})",
+                attempts + 1,
+                max_attempts
+            );
+            break;
+        }
+
+        attempts += 1;
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        if attempts % 3 == 0 {
+            println!("Attempting to start services manually...");
+            let _ = Command::new("pipewire").spawn();
+            let _ = Command::new("wireplumber").spawn();
+        }
+    }
+
+    if attempts >= max_attempts {
+        println!("⚠ Audio services may not have started properly");
+        println!("⚠ Try logging out and back in, or reboot");
+    }
+
+    Ok(())
+}
+
+/// Force PipeWire to reload configuration
+fn force_pipewire_reload() -> Result<(), String> {
+    println!("Forcing PipeWire to reload configuration...");
+
+    // Method 1: Send SIGHUP to pipewire daemon
+    if let Ok(output) = Command::new("pgrep").arg("pipewire").output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let pid_str = stdout.trim();
+            if !pid_str.is_empty() {
+                // Store the PID in a variable to avoid temporary value issues
+                let pid = pid_str.to_string();
+                let _ = Command::new("kill").args(["-HUP", &pid]).status();
+                println!("✓ Sent SIGHUP to PipeWire (PID: {})", pid);
+            }
+        }
+    }
+
+    // Method 2: Use pw-cli to reload
+    let _ = Command::new("pw-cli").arg("info").arg("0").output();
+
+    // Method 3: Use pactl to trigger reload
+    let _ = Command::new("pactl").arg("info").output();
+
+    // Method 4: Touch config file to trigger reload
+    let username = whoami::username();
+    let config_path = format!("/home/{}/.config/pipewire/pipewire.conf", username);
+    if Path::new(&config_path).exists() {
+        let _ = Command::new("touch").arg(&config_path).status();
+    }
+
+    Ok(())
+}
+
+/// Backup current audio settings
+fn backup_audio_settings() -> Result<(), String> {
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+    let backup_dir = format!("/tmp/pro-audio-backup-{}", timestamp);
+
+    println!("Backing up current audio settings to: {}", backup_dir);
+
+    fs::create_dir_all(&backup_dir)
+        .map_err(|e: std::io::Error| format!("Failed to create backup directory: {}", e))?;
+
+    // Backup PipeWire configs
+    let username = whoami::username();
+    let pw_dirs = [
+        "/etc/pipewire",
+        &format!("/home/{}/.config/pipewire", username),
+    ];
+
+    for dir in &pw_dirs {
+        if Path::new(dir).exists() {
+            let backup_subdir = format!("{}/{}", backup_dir, dir.replace('/', "_"));
+            fs::create_dir_all(&backup_subdir).map_err(|e: std::io::Error| {
+                format!("Failed to create backup subdirectory: {}", e)
+            })?;
+
+            // Copy config files
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().map_or(false, |ext| ext == "conf") {
+                        if let Some(filename) = path.file_name() {
+                            let dest = format!("{}/{}", backup_subdir, filename.to_string_lossy());
+                            let _ = fs::copy(&path, &dest);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!("✓ Settings backed up to: {}", backup_dir);
+    Ok(())
+}
+
+/// Enhanced verification for advanced settings
+fn verify_advanced_settings_applied(
+    settings: &AudioSettings,
+    system_wide: bool,
+) -> Result<(), String> {
+    println!("\n=== VERIFYING ADVANCED SETTINGS ===");
+
+    // Wait a bit more for everything to settle
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Method 1: Check PipeWire core info with MORE DETAIL
+    println!("Method 1: Checking PipeWire core info in detail...");
+    let output = Command::new("pw-cli")
+        .arg("info")
+        .arg("0")
+        .output()
+        .map_err(|e| format!("Failed to run pw-cli: {}", e))?;
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+
+    // Look for ALL clock-related properties
+    let mut found_settings = Vec::new();
+    for line in output_str.lines() {
+        if line.contains("clock.") || line.contains("default.") {
+            found_settings.push(line.trim());
+        }
+    }
+
+    println!("Found clock/default settings:");
+    for setting in &found_settings {
+        println!("  {}", setting);
+    }
+
+    // Extract current settings more carefully
+    let mut current_rate = None;
+    let mut current_quantum = None;
+
+    for line in output_str.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('*') && trimmed.contains("default.clock.rate") {
+            if let Some(value) = extract_number_from_line(trimmed) {
+                current_rate = Some(value);
+            }
+        } else if trimmed.starts_with('*') && trimmed.contains("default.clock.quantum") {
+            if let Some(value) = extract_number_from_line(trimmed) {
+                current_quantum = Some(value);
+            }
+        }
+    }
+
+    println!(
+        "\nDetected settings: rate={:?}, quantum={:?}",
+        current_rate, current_quantum
+    );
+    println!(
+        "Expected settings: rate={}, quantum={}",
+        settings.sample_rate, settings.buffer_size
+    );
+
+    // Check if settings match
+    if let (Some(rate), Some(quantum)) = (current_rate, current_quantum) {
+        if rate == settings.sample_rate && quantum == settings.buffer_size {
+            println!("✓ SUCCESS: Settings verified successfully via pw-cli");
+            return Ok(());
+        } else {
+            println!("⚠ WARNING: Settings mismatch via pw-cli");
+            println!("  Detected: {}Hz/{} samples", rate, quantum);
+            println!(
+                "  Expected: {}Hz/{} samples",
+                settings.sample_rate, settings.buffer_size
+            );
+        }
+    } else {
+        println!("⚠ WARNING: Could not detect all settings via pw-cli");
+    }
+
+    // Method 2: Check via pactl with more detail
+    println!("\nMethod 2: Checking via pactl with detail...");
+    let output = Command::new("pactl")
+        .arg("info")
+        .output()
+        .map_err(|e| format!("Failed to run pactl: {}", e))?;
+
+    let pactl_output = String::from_utf8_lossy(&output.stdout);
+    println!("pactl info output:");
+    for line in pactl_output.lines() {
+        println!("  {}", line);
+    }
+
+    // Method 3: Check active configuration files in detail
+    println!("\nMethod 3: Checking active configuration files...");
+    let config_dir = if system_wide {
+        "/etc/pipewire/pipewire.conf.d"
+    } else {
+        let username = whoami::username();
+        &format!("/home/{}/.config/pipewire/pipewire.conf.d", username)
+    };
+
+    println!("Config directory: {}", config_dir);
+    if let Ok(entries) = fs::read_dir(config_dir) {
+        let mut configs = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |ext| ext == "conf") {
+                let filename = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                configs.push(filename);
+            }
+        }
+        configs.sort();
+        println!("Active config files ({}):", configs.len());
+        for config in configs {
+            println!("  - {}", config);
+        }
+    }
+
+    // Method 4: Check if our specific config is being loaded
+    println!("\nMethod 4: Checking if our config is loaded...");
+    let our_config = format!("{}/99-pro-audio-advanced.conf", config_dir);
+    if Path::new(&our_config).exists() {
+        println!("✓ Our config file exists: {}", our_config);
+
+        // Check if it's the only high-priority config
+        if let Ok(entries) = fs::read_dir(config_dir) {
+            let high_priority_configs: Vec<String> = entries
+                .flatten()
+                .filter(|entry| {
+                    let path = entry.path();
+                    path.is_file()
+                        && path.extension().map_or(false, |ext| ext == "conf")
+                        && path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .starts_with("99-")
+                })
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .collect();
+
+            println!("High priority configs (99-*):");
+            for config in &high_priority_configs {
+                println!("  - {}", config);
+            }
+
+            if high_priority_configs.len() > 1 {
+                println!("⚠ WARNING: Multiple high-priority configs may be conflicting");
+            }
+        }
+    } else {
+        println!("⚠ ERROR: Our config file does not exist!");
+    }
+
+    // Provide detailed troubleshooting
+    let diagnostic = format!(
+        "\n=== TROUBLESHOOTING INFORMATION ===\n\
+        \n\
+        DETECTED SETTINGS:\n\
+        - Sample Rate: {}Hz (expected: {}Hz)\n\
+        - Buffer Size: {} samples (expected: {} samples)\n\
+        \n\
+        CONFIGURATION STATUS:\n\
+        - Config file: {}/99-pro-audio-advanced.conf\n\
+        - System-wide: {}\n\
+        \n\
+        IMMEDIATE TROUBLESHOOTING STEPS:\n\
+        1. Check config syntax:\n\
+           cat {}/99-pro-audio-advanced.conf | grep -E '(default.clock|audio.rate)'\n\
+        \n\
+        2. Force full restart:\n\
+           systemctl --user stop pipewire pipewire-pulse wireplumber\n\
+           pkill -9 pipewire wireplumber\n\
+           systemctl --user start pipewire pipewire-pulse wireplumber\n\
+        \n\
+        3. Check for conflicting configs:\n\
+           ls -la /usr/share/pipewire/pipewire.conf.d/\n\
+           ls -la ~/.config/pipewire/pipewire.conf.d/\n\
+           ls -la /etc/pipewire/pipewire.conf.d/\n\
+        \n\
+        4. Test with minimal config:\n\
+           echo 'context.properties = {{ default.clock.rate = {}, default.clock.quantum = {} }}' > /tmp/test.conf\n\
+           PW_CONFIG_FILE=/tmp/test.conf pipewire --verbose\n\
+        \n\
+        5. Check PipeWire logs:\n\
+           journalctl --user -u pipewire -n 50\n\
+           journalctl --user -u wireplumber -n 50",
+        current_rate.unwrap_or(0),
+        settings.sample_rate,
+        current_quantum.unwrap_or(0),
+        settings.buffer_size,
+        config_dir,
+        system_wide,
+        config_dir,
+        settings.sample_rate,
+        settings.buffer_size
+    );
+
+    println!("{}", diagnostic);
+
+    // Don't fail - just warn the user
+    Ok(())
+}
+
+/// Helper to extract numbers from config lines
+fn extract_number_from_line(line: &str) -> Option<u32> {
+    // Handle lines like: *		default.clock.rate = "48000"
+    let line = line.trim_start_matches('*').trim();
+    let parts: Vec<&str> = line.split('=').collect();
+    if parts.len() >= 2 {
+        parts[1].trim().trim_matches('"').parse::<u32>().ok()
+    } else {
+        None
+    }
+}
+
 /// Improved unified function to restart audio services with timeout
-fn restart_audio_services(use_legacy: bool, system_wide: bool) -> Result<(), String> {
+pub fn restart_audio_services(use_legacy: bool, system_wide: bool) -> Result<(), String> {
     println!("Restarting audio services...");
     let start_time = Instant::now();
 
@@ -953,7 +1829,7 @@ fn restart_audio_services(use_legacy: bool, system_wide: bool) -> Result<(), Str
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
 
-    // NEW: Check if services are actually running with timeout
+    // Check if services are actually running with timeout
     println!("Checking if audio services are running...");
     let max_wait_time = Duration::from_secs(10);
     let check_interval = Duration::from_millis(500);
@@ -1273,7 +2149,6 @@ fn create_pipewire_exclusive_config(
 
     let audio_format = if low_latency { "S32LE" } else { "S24LE" };
 
-    // FIXED: More conservative settings that won't break PipeWire
     let config_content = if direct_hardware {
         format!(
             r#"# Pro Audio Config - Exclusive Direct Hardware Access
@@ -1286,6 +2161,9 @@ context.properties = {{
     # Use standard rate checking to avoid crashes
     settings.check-quantum = true
     settings.check-rate = true
+    # Force our settings
+    default.clock.force-quantum = {}
+    default.clock.force-rate = {}
 }}
 
 # Configure for low latency with safe defaults
@@ -1325,7 +2203,14 @@ context.spa-libs = {{
     api.v4l2.* = v4l2/libspa-v4l2
 }}
 "#,
-            sample_rate, buffer_size, sample_rate, audio_format, sample_rate, sample_rate
+            sample_rate,
+            buffer_size,
+            sample_rate,
+            buffer_size,
+            sample_rate,
+            audio_format,
+            sample_rate,
+            sample_rate
         )
     } else {
         format!(
@@ -1339,6 +2224,9 @@ context.properties = {{
     # Minimal processing for low latency
     settings.check-quantum = true
     settings.check-rate = true
+    # Force our settings
+    default.clock.force-quantum = {}
+    default.clock.force-rate = {}
 }}
 
 context.modules = [
@@ -1372,6 +2260,8 @@ device.rules = [
     }}
 ]
 "#,
+            sample_rate,
+            buffer_size,
             sample_rate,
             buffer_size,
             sample_rate,
@@ -1704,5 +2594,22 @@ mod tests {
         assert!(!config_content.contains("rt.prio = 88"));
         assert!(!config_content.contains("rt.time.soft = 100000"));
         assert!(!config_content.contains("rt.time.hard = 100000"));
+    }
+
+    #[test]
+    fn test_extract_number_from_line() {
+        assert_eq!(
+            extract_number_from_line(r#"default.clock.rate = "48000""#),
+            Some(48000)
+        );
+        assert_eq!(
+            extract_number_from_line(r#"default.clock.quantum = "1024""#),
+            Some(1024)
+        );
+        assert_eq!(extract_number_from_line("not a number line"), None);
+        assert_eq!(
+            extract_number_from_line("default.clock.rate = invalid"),
+            None
+        );
     }
 }
