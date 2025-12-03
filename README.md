@@ -6,12 +6,14 @@ A professional audio configuration tool for Linux systems that provides a simple
 
 ## Why This Exists
 
-After 10 years of using Fedora and other Linux distributions, I realized we're still missing a fundamental tool: a simple, graphical way to configure professional audio settings. In 2025, manually editing configuration files shouldn't be the only option for adjusting basic audio parameters.
+After 10 years of using Fedora and other Linux distributions, I realized we're still missing a fundamental tool: a simple, graphical way to configure professional audio settings. In 2025, manually editing configuration files shouldn't be the only option for adjusting basic audio parameters. If you wish to support me for future updates with some symbolic donation, BuyMeCoffe button.
 
 ![Running the program](scrshots/scr1.png)  
 *(Program running)*
 
 ## Features
+
+All current features are showcased in the  [Gallery](https://github.com/Peter-L-SVK/pro_audio_config/blob/main/scrshots/README.md) 
 
 - **Device Detection**: Automatically detects and displays current audio devices (PipeWire, ALSA, PulseAudio)
 - **Sample Rate Configuration**: Support for rates from 44.1 kHz to 384 kHz
@@ -27,6 +29,15 @@ After 10 years of using Fedora and other Linux distributions, I realized we're s
 - **Independent Settings Management**: Configure input and output devices with different sample rates, bit depths, and buffer sizes
 - **Clear Visual Separation**: Intuitive tabbed interface that clearly distinguishes between recording and playback settings
 
+### Advanced Tab Features
+- **Configuration Modes**: Switch between Global System Settings and Exclusive Mode
+- **Professional Audio Settings**: Fine-tune buffer size ranges, thread priorities, and memory locking
+- **Exclusive Mode**: Direct hardware access for single applications (similar to ASIO/WASAPI exclusive mode)
+- **Latency Calculation**: Real-time latency display based on buffer size and sample rate
+- **Hardware Optimization**: Memory locking, device suspend prevention, and clock source selection
+- **Resampling Control**: Adjust resampler quality or disable automatic resampling entirely
+- **Channel Management**: Option to disable automatic channel remixing for professional workflows
+
 ### Configuration Scope
 - **User-Specific Configuration**: Apply settings only for the current user (default)
 - **System-Wide Configuration**: Apply settings for all users on the system (requires admin privileges)
@@ -36,6 +47,9 @@ After 10 years of using Fedora and other Linux distributions, I realized we're s
 - **Dedicated WirePlumber Configs**: Separate configuration generators for input vs output devices
 - **Independent Signal Handlers**: Each tab manages its own settings and apply operations
 - **Comprehensive Testing**: Extensive test suite covering new input/output separation features
+- **Advanced configuration options** ready for professional studio workflows
+- **Exclusive mode support** for applications requiring ASIO-like direct hardware access
+- **Real-time performance tuning** with thread priority and memory management
 
 ## Supported Audio Systems
 
@@ -107,6 +121,34 @@ pro-audio-config
 ### Input/Output Tabs
 - **Output Tab**: Configure playback devices (speakers, headphones, HDMI outputs)
 - **Input Tab**: Configure recording devices (microphones, audio interfaces, line inputs)
+
+### Advanced Tab
+The Advanced Tab provides professional-grade audio configuration options:
+
+#### Configuration Modes
+- **Global System Settings**: Configure audio settings that apply to ALL applications system-wide
+- **Exclusive Mode**: Provide direct hardware access to a SINGLE application, bypassing mixing and processing
+
+#### Professional Settings
+- **Buffer Size Range**: Set minimum and maximum buffer sizes for dynamic adjustment
+- **Real-time Thread Priority**: Control CPU scheduling priority for audio threads
+- **Memory Locking**: Lock audio buffers in RAM to prevent swapping and reduce latency
+- **Device Suspend Prevention**: Keep audio devices active even when idle
+- **Resampler Quality**: Adjust the quality/performance tradeoff for sample rate conversion
+- **Clock Source Selection**: Choose between system clock, monotonic, or real-time clock sources
+
+#### Exclusive Mode Features
+- **Application Targeting**: Specify which application should receive exclusive audio access
+- **Direct Hardware Access**: Bypass audio mixing for lowest possible latency
+- **Real-time Latency Display**: See calculated latency based on your buffer size and sample rate
+- **Device Capability Checking**: Automatic validation of device compatibility with exclusive mode
+
+#### Using Exclusive Mode
+1. Select "Exclusive Mode" from the Configuration Mode dropdown
+2. Enter the application name and process name (e.g., "Reaper" and "reaper")
+3. Select your audio device and desired buffer size/sample rate
+4. Click "Apply Exclusive Mode Settings"
+5. To return to standard shared mode, click "Disable Exclusive Mode"
 
 Each tab maintains independent settings, allowing you to optimize input and output devices separately for your specific use case.
 
