@@ -1655,8 +1655,10 @@ impl AdvancedTab {
         let buffer_size_combo = self.buffer_size_combo.clone();
         let device_combo = self.device_combo.clone();
 
-        let _application_name_entry = self.application_name_entry.clone();
-        let _process_name_entry = self.process_name_entry.clone();
+        // Clone the entry fields here, before using them in closures
+        let application_name_entry = self.application_name_entry.clone();
+        let process_name_entry = self.process_name_entry.clone();
+
         let exclusive_device_combo = self.exclusive_device_combo.clone();
         let exclusive_sample_rate_combo = self.exclusive_sample_rate_combo.clone();
         let _exclusive_bit_depth_combo = self.exclusive_bit_depth_combo.clone();
@@ -1776,6 +1778,10 @@ impl AdvancedTab {
             let exclusive_device_combo = exclusive_device_combo.clone();
             let exclusive_sample_rate_combo = exclusive_sample_rate_combo.clone();
             let exclusive_buffer_size_combo = exclusive_buffer_size_combo.clone();
+
+            // Use the cloned entry fields from above
+            let application_name_entry_clone = application_name_entry.clone();
+            let process_name_entry_clone = process_name_entry.clone();
 
             // Clone the apply_button for use inside the closure
             let apply_button_clone = apply_button.clone();
@@ -1934,6 +1940,25 @@ impl AdvancedTab {
                             .and_then(|id| id.parse::<u32>().ok())
                             .unwrap_or(48000);
 
+			// Get app name and process name from entry fields
+			let app_name = {
+			    let text = application_name_entry_clone.text(); // Use .text() instead of .get_text()
+			    if text.is_empty() {
+				None
+			    } else {
+				Some(text.to_string())
+			    }
+			};
+
+			let app_process_name = {
+			    let text = process_name_entry_clone.text(); // Use .text() instead of .get_text()
+			    if text.is_empty() {
+				None
+			    } else {
+				Some(text.to_string())
+			    }
+			};
+
 			let status_label_clone = status_label.clone();
 			let apply_button_clone_inner = apply_button_clone.clone();
 
@@ -1953,6 +1978,8 @@ impl AdvancedTab {
 				buffer_size,
 				sample_rate,
 				Some(device_pattern), // Pass the device pattern
+				app_name,
+				app_process_name,
                             );
                             let _ = tx.send(result);
 			});

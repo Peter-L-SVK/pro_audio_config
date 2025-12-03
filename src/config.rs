@@ -10,6 +10,7 @@
 
 use crate::audio::AudioSettings;
 use chrono::Local;
+use glob::glob;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -409,9 +410,9 @@ pub fn update_audio_settings(settings: &AudioSettings, system_wide: bool) -> Res
 
     // Clean up conflicting configs first
     if system_wide {
-        cleanup_user_pipewire_configs()?;
-    } else {
         cleanup_system_pipewire_configs()?;
+    } else {
+        cleanup_user_pipewire_configs()?;
     }
 
     // Approach 1: Create PipeWire config fragment
@@ -470,6 +471,16 @@ pub fn update_audio_settings(settings: &AudioSettings, system_wide: bool) -> Res
     }
 }
 
+/// Clean up conflicting user PipeWire configurations
+fn cleanup_user_pipewire_configs() -> Result<(), String> {
+    cleanup_audio_configs(false, "pipewire", "conflicting")
+}
+
+/// Clean up conflicting system PipeWire configurations
+fn cleanup_system_pipewire_configs() -> Result<(), String> {
+    cleanup_audio_configs(true, "pipewire", "conflicting")
+}
+
 /// Creates a PipeWire configuration fragment file with proper privilege handling
 fn create_pipewire_fragment(settings: &AudioSettings, system_wide: bool) -> Result<(), String> {
     let config_content = format!(
@@ -518,6 +529,9 @@ context.modules = [
         )]
     };
 
+    // Clean up ALL conflicting configs before creating exclusive
+    cleanup_audio_configs(system_wide, "pipewire", "conflicting")?;
+
     for dir in &config_dirs {
         let config_path = format!("{}/99-pro-audio-high-priority.conf", dir);
 
@@ -540,108 +554,10 @@ context.modules = [
 
         println!("✓ PipeWire config created: {}", config_path);
 
-        // Also remove any lower priority configs we might have created
-        cleanup_old_pipewire_configs(&dir)?;
-
         return Ok(());
     }
 
     Err("Failed to write PipeWire configuration to any location".to_string())
-}
-
-/// Clean up old pipewire config files to avoid conflicts
-fn cleanup_old_pipewire_configs(dir: &str) -> Result<(), String> {
-    let old_configs = [
-        format!("{}/99-pro-audio.conf", dir),
-        format!("{}/50-pro-audio.conf", dir),
-    ];
-
-    for old_config in &old_configs {
-        if Path::new(old_config).exists() {
-            if old_config.starts_with("/etc/") {
-                // System path - need privileges
-                let _ = execute_with_privileges("rm", &["-f", old_config]);
-            } else {
-                // User path - no privileges needed
-                let _ = fs::remove_file(old_config);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Clean up system-wide pipewire config files
-fn cleanup_system_pipewire_configs() -> Result<(), String> {
-    let system_configs = [
-        "/etc/pipewire/pipewire.conf.d/99-pro-audio-high-priority.conf",
-        "/etc/pipewire/pipewire.conf.d/99-pro-audio.conf",
-        "/etc/pipewire/pipewire.conf.d/50-pro-audio.conf",
-    ];
-
-    let mut removed_count = 0;
-    for config_path in &system_configs {
-        if Path::new(config_path).exists() {
-            match execute_with_privileges("rm", &["-f", config_path]) {
-                Ok(_) => {
-                    println!("✓ Removed system config: {}", config_path);
-                    removed_count += 1;
-                }
-                Err(e) => {
-                    println!(
-                        "Note: Could not remove system config {}: {}",
-                        config_path, e
-                    );
-                }
-            }
-        }
-    }
-
-    if removed_count > 0 {
-        println!("✓ Removed {} system configuration files", removed_count);
-    }
-
-    Ok(())
-}
-
-/// Clean up user-specific pipewire config files
-fn cleanup_user_pipewire_configs() -> Result<(), String> {
-    let username = whoami::username();
-    let user_configs = [
-        format!(
-            "/home/{}/.config/pipewire/pipewire.conf.d/99-pro-audio-high-priority.conf",
-            username
-        ),
-        format!(
-            "/home/{}/.config/pipewire/pipewire.conf.d/99-pro-audio.conf",
-            username
-        ),
-        format!(
-            "/home/{}/.config/pipewire/pipewire.conf.d/50-pro-audio.conf",
-            username
-        ),
-    ];
-
-    let mut removed_count = 0;
-    for config_path in &user_configs {
-        if Path::new(config_path).exists() {
-            match fs::remove_file(config_path) {
-                Ok(_) => {
-                    println!("✓ Removed user config: {}", config_path);
-                    removed_count += 1;
-                }
-                Err(e) => {
-                    println!("Note: Could not remove user config {}: {}", config_path, e);
-                }
-            }
-        }
-    }
-
-    if removed_count > 0 {
-        println!("✓ Removed {} user configuration files", removed_count);
-    }
-
-    Ok(())
 }
 
 /// Creates an ADVANCED PipeWire configuration fragment for professional use
@@ -809,8 +725,8 @@ context.objects = [
         )
     };
 
-    // Clean FIRST
-    cleanup_quantum_configs(system_wide)?;
+    // Clean up ALL conflicting configs before creating
+    cleanup_audio_configs(system_wide, "pipewire", "conflicting")?;
 
     // Write the quantum-override config
     write_config_with_privileges(&config_path, &config_content)?;
@@ -821,59 +737,82 @@ context.objects = [
     Ok(())
 }
 
-/// Clean up quantum-related configs
-fn cleanup_quantum_configs(system_wide: bool) -> Result<(), String> {
-    println!("Cleaning quantum configs...");
-
+/// Unified cleanup function for all PipeWire/WirePlumber configurations
+/// system_wide: true for /etc/, false for user configs
+/// config_type: "pipewire" or "wireplumber"
+/// mode: "all", "basic", "advanced", "exclusive", "conflicting"
+fn cleanup_audio_configs(system_wide: bool, config_type: &str, mode: &str) -> Result<(), String> {
     let username = whoami::username();
 
-    // Use consistent Vec<String> type
-    let patterns: Vec<String> = if system_wide {
-        vec![
-            "/etc/pipewire/pipewire.conf.d/*pro-audio*.conf".to_string(),
-            "/etc/pipewire/pipewire.conf.d/*quantum*.conf".to_string(),
-        ]
+    // Determine base directory
+    let base_dir = if system_wide {
+        "/etc".to_string()
     } else {
-        vec![
-            format!(
-                "/home/{}/.config/pipewire/pipewire.conf.d/*pro-audio*.conf",
-                username
-            ),
-            format!(
-                "/home/{}/.config/pipewire/pipewire.conf.d/*quantum*.conf",
-                username
-            ),
-        ]
+        format!("/home/{}", username)
     };
 
+    // Build config directory path
+    let config_dir = match config_type {
+        "pipewire" => format!("{}/.config/pipewire/pipewire.conf.d", base_dir),
+        "wireplumber" => format!("{}/.config/wireplumber/wireplumber.conf.d", base_dir),
+        _ => return Err(format!("Unknown config type: {}", config_type)),
+    };
+
+    println!("Cleaning up {} configs in: {}", mode, config_dir);
+
+    // Define which files to remove based on mode
+    let patterns = match mode {
+        "all" => vec![
+            format!("{}/*pro-audio*.conf", config_dir),
+            format!("{}/*quantum*.conf", config_dir),
+            format!("{}/*exclusive*.conf", config_dir),
+        ],
+        "basic" => vec![
+            format!("{}/99-pro-audio-high-priority.conf", config_dir),
+            format!("{}/99-pro-audio.conf", config_dir),
+            format!("{}/50-pro-audio.conf", config_dir),
+        ],
+        "advanced" => vec![
+            format!("{}/99-pro-audio-advanced.conf", config_dir),
+            format!("{}/99-pro-audio-quantum-override.conf", config_dir),
+        ],
+        "exclusive" => vec![format!("{}/99-pro-audio-exclusive.conf", config_dir)],
+        "conflicting" => vec![
+            format!("{}/99-pro-audio-high-priority.conf", config_dir),
+            format!("{}/99-pro-audio.conf", config_dir),
+            format!("{}/50-pro-audio.conf", config_dir),
+            format!("{}/99-pro-audio-advanced.conf", config_dir),
+            format!("{}/99-pro-audio-quantum-override.conf", config_dir),
+        ],
+        _ => return Err(format!("Unknown cleanup mode: {}", mode)),
+    };
+
+    let mut removed_count = 0;
+
     for pattern in patterns {
-        let _ = Command::new("sh")
-            .args(["-c", &format!("rm -f {}", pattern)])
-            .status();
+        // Use glob pattern matching for wildcards
+        if pattern.contains('*') {
+            if let Ok(entries) = glob::glob(&pattern) {
+                for entry in entries.flatten() {
+                    if let Ok(()) = fs::remove_file(&entry) {
+                        println!("✓ Removed: {}", entry.display());
+                        removed_count += 1;
+                    }
+                }
+            }
+        } else {
+            // Direct file path
+            if Path::new(&pattern).exists() {
+                if let Ok(()) = fs::remove_file(&pattern) {
+                    println!("✓ Removed: {}", pattern);
+                    removed_count += 1;
+                }
+            }
+        }
     }
 
-    Ok(())
-}
-
-/// Clean up basic pipewire config files when using advanced mode
-fn cleanup_basic_pipewire_configs(dir: &str) -> Result<(), String> {
-    let basic_configs = [
-        format!("{}/99-pro-audio-high-priority.conf", dir), // Basic Output/Input tab config
-        format!("{}/99-pro-audio.conf", dir),
-        format!("{}/50-pro-audio.conf", dir),
-    ];
-
-    for config in &basic_configs {
-        if Path::new(config).exists() {
-            if config.starts_with("/etc/") {
-                // System path - need privileges
-                let _ = execute_with_privileges("rm", &["-f", config]);
-            } else {
-                // User path - no privileges needed
-                let _ = fs::remove_file(config);
-            }
-            println!("✓ Removed basic config: {}", config);
-        }
+    if removed_count > 0 {
+        println!("✓ Removed {} configuration files", removed_count);
     }
 
     Ok(())
@@ -1282,11 +1221,15 @@ pub fn apply_advanced_professional_settings(
         clock_source,
     )?;
 
-    // 3. RESTART with verification
+    // 3. Clean up basic configs to avoid conflicts
+    cleanup_audio_configs(system_wide, "pipewire", "conflicting")?;
+
+    // 4. RESTART with verification
     println!("\nRestarting with quantum verification...");
     quantum_verified_restart(system_wide)?;
 
-    // 4. Verify
+    // 5. Verify
+    verify_advanced_settings_applied(settings, system_wide)?;
     verify_quantum_applied(settings)
 }
 
@@ -1708,7 +1651,7 @@ fn verify_advanced_settings_applied(
         \n\
         4. Test with minimal config:\n\
            echo 'context.properties = {{ default.clock.rate = {}, default.clock.quantum = {} }}' > /tmp/test.conf\n\
-           PW_CONFIG_FILE=/tmp/test.conf pipewire --verbose\n\
+           PW_CONFIG_FILE=/tmp.test.conf pipewire --verbose\n\
         \n\
         5. Check PipeWire logs:\n\
            journalctl --user -u pipewire -n 50\n\
@@ -2026,7 +1969,9 @@ pub fn apply_advanced_audio_settings(
     low_latency: bool,
     buffer_size: u32,
     sample_rate: u32,
-    device_pattern: Option<String>, // Add device pattern parameter
+    device_pattern: Option<String>,
+    app_name: Option<String>,
+    app_process_name: Option<String>,
 ) -> Result<(), String> {
     println!("Applying advanced audio settings:");
     println!("  Exclusive Mode: {}", exclusive_mode);
@@ -2040,18 +1985,33 @@ pub fn apply_advanced_audio_settings(
     }
 
     if exclusive_mode {
-        let device = device_pattern.unwrap_or_else(|| "default".to_string());
+        let device = device_pattern
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
         apply_enhanced_exclusive_mode_settings(
             direct_hardware,
             low_latency,
             buffer_size,
             sample_rate,
             &device,
-        )
+            &app_name.unwrap_or_default(), // Provide default empty string
+            &app_process_name.unwrap_or_default(), // Provide default empty string
+        )?;
     } else {
         // Return to standard shared mode
-        restore_standard_audio_mode()
+        restore_standard_audio_mode()?;
     }
+
+    // AFTER applying settings, verify them
+    let settings = AudioSettings {
+        sample_rate,
+        bit_depth: if low_latency { 32 } else { 24 },
+        buffer_size,
+        device_id: device_pattern.unwrap_or("default".to_string()),
+    };
+
+    verify_advanced_settings_applied(&settings, true)?;
+    Ok(())
 }
 
 /// Enhanced exclusive mode with device capability checking
@@ -2061,6 +2021,8 @@ fn apply_enhanced_exclusive_mode_settings(
     buffer_size: u32,
     sample_rate: u32,
     device_pattern: &str,
+    app_name: &str,
+    app_process_name: &str,
 ) -> Result<(), String> {
     println!("Configuring enhanced exclusive audio access mode...");
 
@@ -2096,7 +2058,14 @@ fn apply_enhanced_exclusive_mode_settings(
     }
 
     // Proceed with existing exclusive mode configuration
-    apply_exclusive_mode_settings(direct_hardware, low_latency, buffer_size, sample_rate)
+    apply_exclusive_mode_settings(
+        direct_hardware,
+        low_latency,
+        buffer_size,
+        sample_rate,
+        app_name,
+        app_process_name,
+    )
 }
 
 /// Apply exclusive mode configuration
@@ -2105,11 +2074,25 @@ fn apply_exclusive_mode_settings(
     low_latency: bool,
     buffer_size: u32,
     sample_rate: u32,
+    app_name: &str,
+    app_process_name: &str,
 ) -> Result<(), String> {
     println!("Configuring exclusive audio access mode...");
 
+    // Clean up ALL conflicting configs before creating exclusive
+    cleanup_audio_configs(false, "pipewire", "all")?;
+    cleanup_audio_configs(false, "wireplumber", "all")?;
+
     // First, try the modern PipeWire exclusive mode approach
-    match create_pipewire_exclusive_config(direct_hardware, low_latency, buffer_size, sample_rate) {
+    // FIXED: Added missing arguments
+    match create_pipewire_exclusive_config(
+        direct_hardware,
+        low_latency,
+        buffer_size,
+        sample_rate,
+        app_name,
+        app_process_name,
+    ) {
         Ok(()) => {
             println!("✓ PipeWire exclusive mode configured successfully");
             restart_audio_services(false, true)?;
@@ -2126,6 +2109,8 @@ fn apply_exclusive_mode_settings(
         low_latency,
         buffer_size,
         sample_rate,
+        app_name,
+        app_process_name,
     ) {
         Ok(()) => {
             println!("✓ WirePlumber exclusive mode configured successfully");
@@ -2136,12 +2121,14 @@ fn apply_exclusive_mode_settings(
     }
 }
 
-/// Create PipeWire configuration for exclusive mode
+/// Create PipeWire configuration for exclusive mode with application targeting
 fn create_pipewire_exclusive_config(
     direct_hardware: bool,
     low_latency: bool,
     buffer_size: u32,
     sample_rate: u32,
+    app_name: &str,
+    app_process_name: &str,
 ) -> Result<(), String> {
     let username = whoami::username();
     let config_dir = format!("/home/{}/.config/pipewire/pipewire.conf.d", username);
@@ -2149,91 +2136,124 @@ fn create_pipewire_exclusive_config(
 
     let audio_format = if low_latency { "S32LE" } else { "S24LE" };
 
-    let config_content = if direct_hardware {
-        format!(
-            r#"# Pro Audio Config - Exclusive Direct Hardware Access
-# This configuration enables ASIO-like exclusive mode
+    // Clean up ALL conflicting configs before creating exclusive
+    cleanup_audio_configs(false, "pipewire", "conflicting")?;
+    cleanup_audio_configs(false, "wireplumber", "conflicting")?;
+
+    // Get the current default device to target
+    let target_device = match crate::audio::detect_output_audio_device() {
+        Ok(device_info) => {
+            if let Some(device_name) = crate::audio::extract_actual_device_name(&device_info) {
+                println!("Targeting exclusive mode to device: {}", device_name);
+                device_name
+            } else {
+                println!("Warning: Could not extract device name, using default pattern");
+                "alsa.*".to_string()
+            }
+        }
+        Err(e) => {
+            println!(
+                "Warning: Could not detect default device: {}, using default pattern",
+                e
+            );
+            "alsa.*".to_string()
+        }
+    };
+
+    // Sanitize app names for use in config
+    let sanitized_app_name = app_name.replace([' ', '.', ':', '"', '\''], "_");
+    let sanitized_process_name = app_process_name.replace([' ', '.', ':', '"', '\''], "_");
+
+    let config_content = format!(
+        r#"# Pro Audio Config - Exclusive Mode for {}
+# Target application: {} (process: {})
+# This configuration enables ASIO-like exclusive mode for specific application
 
 context.properties = {{
+    # CRITICAL: Override quantum-floor to allow our buffer size
+    default.clock.quantum-floor = {}
+    default.clock.min-quantum = {}
+    default.clock.max-quantum = {}
+
+    # Core settings
     default.clock.rate = {}
     default.clock.quantum = {}
     default.clock.allowed-rates = [ {} ]
-    # Use standard rate checking to avoid crashes
-    settings.check-quantum = true
-    settings.check-rate = true
-    # Force our settings
+
+    # Force settings to be used
     default.clock.force-quantum = {}
     default.clock.force-rate = {}
+
+    # IMPORTANT: Disable quantum checking
+    settings.check-quantum = false
+    settings.check-rate = false
+    settings.check-quantum-limit = false
+    settings.check-quantum-floor = false
+
+    # Additional exclusive mode settings
+    stream.dont-remix = true
+    stream.dont-resample = true
+    mem.allow-mlock = true
+    session.suspend-timeout-seconds = 0
+
+    # Debug properties to verify our config is loaded
+    pro-audio-config.rate = {}
+    pro-audio-config.quantum = {}
+    pro-audio-config.version = "1.8"
+    pro-audio-config.exclusive = true
+    pro-audio-config.target-app = "{}"
+    pro-audio-config.target-process = "{}"
+    pro-audio-config.target-device = "{}"
 }}
 
-# Configure for low latency with safe defaults
-context.modules = [
+# Device-specific rules with CORRECT JSON SYNTAX
+# NOTE: PipeWire uses JSON syntax, NOT Lua table syntax
+context.rules = [
     {{
-        name = libpipewire-module-rt
-        args = {{
-            nice.level = -11    # Reduced from -20 to avoid permission issues
-            rt.prio = 80        # Reduced from 88 to avoid permission issues
-            rt.time.soft = 200000  # Increased from 100000 for better compatibility
-            rt.time.hard = 200000  # Increased from 100000 for better compatibility
+        matches = [
+            {{
+                node.name = "~{}"
+            }}
+        ],
+        actions = {{
+            update-props = {{
+                # Override device properties for exclusive access
+                api.alsa.period-size = {}
+                api.alsa.period-num = 2
+                api.alsa.disable-batch = true
+                api.alsa.use-acp = false
+                audio.rate = {}
+                audio.allowed-rates = [ {} ]
+                audio.format = "{}"
+                # Device priority
+                priority.driver = 1000
+                priority.session = 1000
+                # Disable power management
+                device.suspend-on-idle = false
+                node.suspend-on-idle = false
+                # Force our quantum settings on the device
+                node.quantum = {}
+                node.min-quantum = {}
+                node.max-quantum = {}
+                node.lock-quantum = true
+                # Application binding
+                target.object = "exclusive-playback-{}"
+                # Debug info
+                pro-audio.exclusive = true
+                pro-audio.target-app = "{}"
+                pro-audio.target-rate = {}
+                pro-audio.target-quantum = {}
+            }}
         }}
-        flags = [ ifexists nofail ]
     }}
 ]
 
-# Node configuration for exclusive access
-node.factory = {{
-    args = {{
-        node.name = "pro-audio-exclusive-node"
-        node.description = "Pro Audio Exclusive Mode"
-        media.class = "Audio/Sink"
-        audio.format = "{}"
-        audio.rate = {}
-        audio.allowed-rates = [ {} ]
-        audio.channels = 2
-        audio.position = [ FL, FR ]
-        priority.driver = 100
-        session.suspend-timeout-seconds = 10  # ADDED: Allow timeout for recovery
-    }}
-}}
-
-# Add fallback mechanism
-context.spa-libs = {{
-    # Ensure standard libraries are available
-    api.alsa.* = alsa/libspa-alsa
-    api.v4l2.* = v4l2/libspa-v4l2
-}}
-"#,
-            sample_rate,
-            buffer_size,
-            sample_rate,
-            buffer_size,
-            sample_rate,
-            audio_format,
-            sample_rate,
-            sample_rate
-        )
-    } else {
-        format!(
-            r#"# Pro Audio Config - Exclusive PipeWire Access
-# This configuration enables exclusive mode with PipeWire processing
-
-context.properties = {{
-    default.clock.rate = {}
-    default.clock.quantum = {}
-    default.clock.allowed-rates = [ {} ]
-    # Minimal processing for low latency
-    settings.check-quantum = true
-    settings.check-rate = true
-    # Force our settings
-    default.clock.force-quantum = {}
-    default.clock.force-rate = {}
-}}
-
+# Real-time module for better performance
 context.modules = [
     {{
         name = libpipewire-module-rt
         args = {{
-            nice.level = -15
+            nice.level = -11
             rt.prio = 80
             rt.time.soft = 200000
             rt.time.hard = 200000
@@ -2241,33 +2261,42 @@ context.modules = [
         flags = [ ifexists nofail ]
     }}
 ]
-
-# Reserve device for exclusive use with specific pattern
-device.rules = [
-    {{
-        matches = [
-            {{ "device.name", "matches", "alsa.*" }}
-        ],
-        actions = {{
-            update-props = {{
-                device.profile = "pro-audio"
-                api.alsa.disable-batch = true
-                api.alsa.use-acp = false
-                api.alsa.headroom = {}
-                session.suspend-timeout-seconds = 5  # ADDED: Allow shorter timeout
-            }}
-        }}
-    }}
-]
 "#,
-            sample_rate,
-            buffer_size,
-            sample_rate,
-            buffer_size,
-            sample_rate,
-            buffer_size / 2
-        )
-    };
+        // Header and app info (3 args)
+        sanitized_app_name,
+        app_name,
+        app_process_name,
+        // Global quantum settings (3 args)
+        buffer_size,
+        buffer_size,
+        buffer_size * 2,
+        // Core settings (3 args)
+        sample_rate,
+        buffer_size,
+        sample_rate,
+        // Force settings (2 args)
+        buffer_size,
+        sample_rate,
+        // Debug properties (5 args)
+        sample_rate,
+        buffer_size,
+        app_name,
+        app_process_name,
+        target_device,
+        // Device rules (11 args)
+        target_device,
+        buffer_size,
+        sample_rate,
+        sample_rate,
+        audio_format,
+        buffer_size,
+        buffer_size,
+        buffer_size * 2,
+        sanitized_app_name,
+        app_name,
+        sample_rate,
+        buffer_size,
+    );
 
     // Backup current config before writing
     if let Err(e) = backup_current_config(&config_dir) {
@@ -2275,7 +2304,11 @@ device.rules = [
     }
 
     write_config_with_privileges(&config_path, &config_content)?;
-    println!("✓ Exclusive mode configuration created: {}", config_path);
+    println!("✓ Exclusive mode configuration created for:");
+    println!("  Application: {} ({})", app_name, app_process_name);
+    println!("  Device: {}", target_device);
+    println!("  Settings: {}Hz/{} samples", sample_rate, buffer_size);
+    println!("  Config: {}", config_path);
     Ok(())
 }
 
@@ -2285,36 +2318,88 @@ fn create_wireplumber_exclusive_config(
     low_latency: bool,
     buffer_size: u32,
     sample_rate: u32,
+    app_name: &str,
+    app_process_name: &str,
 ) -> Result<(), String> {
     let username = whoami::username();
     let config_dir = format!("/home/{}/.config/wireplumber/wireplumber.conf.d", username);
     let config_path = format!("{}/99-pro-audio-exclusive.conf", config_dir);
 
+    // Create sanitized names for config
+    let sanitized_app_name = app_name.replace([' ', '.', ':', '"', '\''], "_");
+    let sanitized_process_name = app_process_name.replace([' ', '.', ':', '"', '\''], "_");
+
+    let audio_format = if low_latency { "S32LE" } else { "S24LE" };
+
     let config_content = format!(
-        r#"{{
-  "monitor.alsa.rules": [
-    {{
-      "matches": [
-        {{
-          "device.name": "~alsa.*"
-        }}
-      ],
-      "actions": {{
-        "update-props": {{
-          "audio.rate": {},
-          "audio.allowed-rates": [ {} ],
-          "api.alsa.period-size": {},
-          "api.alsa.period-num": 2,
-          "api.alsa.headroom": {},
-          "api.alsa.disable-batch": {},
-          "api.alsa.use-acp": false,
-          "priority.driver": 200,
-          "session.suspend-timeout-seconds": 5  # REDUCED: Allow timeout for recovery
-        }}
+        r#"# Pro Audio Config - Exclusive Mode for WirePlumber
+# Target application: {} (process: {})
+# This configuration enables ASIO-like exclusive mode for specific application
+
+override.monitor.alsa.rules = [
+  {{
+    matches = [
+      {{
+        application.name = "{}",
+        application.process.binary = "{}"
+      }}
+    ],
+    actions = {{
+      update-props = {{
+        # Route this app to our exclusive device
+        node.target = "exclusive-playback-{}",
+        media.class = "Audio/Sink",
+        # Apply exclusive audio settings to this app
+        audio.rate = {},
+        audio.allowed-rates = [ {} ],
+        audio.format = "{}",
+        node.quantum = {},
+        node.pause-on-idle = false,
+        # High priority
+        priority.driver = 3000,
+        priority.session = 3000,
+        # Mark as exclusive
+        stream.exclusive = true
       }}
     }}
-  ]
-}}"#,
+  }}
+]
+
+# Additional device rules for low-latency exclusive access
+override.monitor.alsa.rules = [
+  {{
+    matches = [
+      {{
+        device.name = "~alsa.*"
+      }}
+    ],
+    actions = {{
+      update-props = {{
+        audio.rate = {},
+        audio.allowed-rates = [ {} ],
+        api.alsa.period-size = {},
+        api.alsa.period-num = 2,
+        api.alsa.headroom = {},
+        api.alsa.disable-batch = {},
+        api.alsa.use-acp = false,
+        priority.driver = 200,
+        session.suspend-timeout-seconds = 0  # Never suspend for exclusive mode
+      }}
+    }}
+  }}
+]
+"#,
+        // Application matching section (7 args)
+        app_name,
+        app_process_name,
+        app_name,
+        app_process_name,
+        sanitized_app_name,
+        sample_rate,
+        sample_rate,
+        audio_format,
+        buffer_size,
+        // Device configuration section (5 args)
         sample_rate,
         sample_rate,
         buffer_size,
@@ -2384,7 +2469,7 @@ pub fn check_exclusive_mode_status() -> Result<bool, String> {
     Ok(Path::new(&exclusive_config).exists())
 }
 
-/// NEW: Backup current configuration before making changes
+/// Backup current configuration before making changes
 fn backup_current_config(config_dir: &str) -> Result<(), String> {
     // Skip backup for system directories to avoid permission issues
     // The backup is just a safety measure, not critical
@@ -2395,6 +2480,10 @@ fn backup_current_config(config_dir: &str) -> Result<(), String> {
 
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
     let backup_dir = format!("{}/backup_{}", config_dir, timestamp);
+
+    // Remove exclusive mode configurations
+    cleanup_audio_configs(false, "pipewire", "exclusive")?;
+    cleanup_audio_configs(false, "wireplumber", "exclusive")?;
 
     // Create backup directory
     create_dir_all_with_privileges(&backup_dir)?;
