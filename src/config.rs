@@ -694,13 +694,14 @@ fn create_wireplumber_config_new(
 }
 
 /// Create WirePlumber configuration for hardware device rules
+#[allow(dead_code)]
 fn create_wireplumber_device_config(
     settings: &AudioSettings,
     system_wide: bool,
-    min_buffer: u32,
-    max_buffer: u32,
-    disable_remixing: bool,
-    disable_resampling: bool,
+    _min_buffer: u32,
+    _max_buffer: u32,
+    _disable_remixing: bool,
+    _disable_resampling: bool,
 ) -> Result<(), String> {
     println!("Creating WirePlumber device configuration...");
 
@@ -1192,47 +1193,6 @@ override.monitor.alsa.rules = [
 // Configuration Generation Functions
 // ----------------------------------------------------------------------------
 
-/// Generates legacy WirePlumber Lua configuration content for versions < 0.5
-fn generate_legacy_wireplumber_config(settings: &AudioSettings, stream_type: &str) -> String {
-    let device_pattern = if settings.device_id == "default" {
-        "alsa.*".to_string()
-    } else {
-        settings.device_id.clone()
-    };
-
-    let audio_format = match settings.bit_depth {
-        16 => "S16LE",
-        24 => "S24LE",
-        32 => "S32LE",
-        _ => "S24LE",
-    };
-
-    format!(
-        r#"-- Pro Audio Config Legacy Lua Configuration
--- For WirePlumber versions < 0.5
--- Auto-generated for {} settings
-
-alsa_monitor.rules = {{
-  {{
-    matches = {{
-      {{
-        {{ "device.name", "matches", "{}" }},
-      }},
-    }},
-    apply_properties = {{
-      ["audio.format"] = "{}",
-      ["audio.rate"] = {},
-      ["api.alsa.period-size"] = {},
-      ["api.alsa.period-num"] = 2,
-      ["api.alsa.headroom"] = 8192,
-    }},
-  }}
-}}
-"#,
-        stream_type, device_pattern, audio_format, settings.sample_rate, settings.buffer_size
-    )
-}
-
 /// Generates modern WirePlumber JSON configuration content for versions >= 0.5
 fn generate_wireplumber_config(settings: &AudioSettings, _stream_type: &str) -> String {
     let device_pattern = if settings.device_id == "default" {
@@ -1346,7 +1306,7 @@ fn cleanup_audio_configs(system_wide: bool, config_type: &str, mode: &str) -> Re
     for pattern in patterns {
         // Use glob pattern matching for wildcards
         if pattern.contains('*') {
-            if let Ok(entries) = glob::glob(&pattern) {
+            if let Ok(entries) = glob(&pattern) {
                 for entry in entries.flatten() {
                     if let Ok(()) = fs::remove_file(&entry) {
                         println!("✓ Removed: {}", entry.display());
@@ -1561,32 +1521,19 @@ fn apply_audio_settings_with_auth(
         stream_type, settings.sample_rate, settings.bit_depth, settings.buffer_size
     );
 
-    // First try the new multi-approach configuration
+    // Try PipeWire configuration first
     match update_audio_settings(&settings, true) {
         Ok(()) => {
-            println!(
-                "✓ Successfully applied {} settings using new configuration system",
-                stream_type
-            );
+            println!("✓ Applied via PipeWire configuration");
             return Ok(());
         }
         Err(e) => {
-            println!(
-                "New configuration system failed: {}, falling back to legacy method...",
-                e
-            );
+            println!("PipeWire config failed ({}), trying WirePlumber...", e);
         }
     }
 
-    // Fall back to legacy WirePlumber configuration (only for older versions)
-    if should_use_legacy_wireplumber_config()? {
-        apply_legacy_wireplumber_config(&settings, stream_type)
-    } else {
-        Err(
-            "Legacy WirePlumber configuration not applicable for current WirePlumber version"
-                .to_string(),
-        )
-    }
+    // Fallback to WirePlumber device-specific configuration
+    apply_wireplumber_device_config(&settings, stream_type)
 }
 
 /// Main function to apply audio settings using multiple configuration approaches with fallbacks
@@ -1662,69 +1609,6 @@ pub fn update_audio_settings(settings: &AudioSettings, system_wide: bool) -> Res
         Ok(())
     } else {
         Err("Failed to apply audio settings through any method".to_string())
-    }
-}
-
-// ----------------------------------------------------------------------------
-// Legacy WirePlumber Functions
-// ----------------------------------------------------------------------------
-
-/// Legacy WirePlumber configuration method (fallback for versions < 0.5)
-fn apply_legacy_wireplumber_config(
-    settings: &AudioSettings,
-    stream_type: &str,
-) -> Result<(), String> {
-    println!("Applying legacy WirePlumber Lua configuration for version < 0.5");
-
-    let config_content = generate_legacy_wireplumber_config(settings, stream_type);
-    let username = whoami::username();
-    let config_path = if stream_type == "output" {
-        format!(
-            "/home/{}/.config/wireplumber/main.lua.d/50-pro-audio-output.lua",
-            username
-        )
-    } else {
-        format!(
-            "/home/{}/.config/wireplumber/main.lua.d/50-pro-audio-input.lua",
-            username
-        )
-    };
-
-    // Write configuration file (user path, no privileges needed)
-    write_config_with_privileges(&config_path, &config_content)?;
-
-    println!("Legacy WirePlumber Lua configuration written successfully");
-    println!("- {}", config_path);
-
-    // Restart audio services using legacy method
-    restart_audio_services(true, false)?;
-
-    println!("Audio services restarted successfully");
-    Ok(())
-}
-
-/// Checks if we should use legacy WirePlumber config (for versions < 0.5)
-fn should_use_legacy_wireplumber_config() -> Result<bool, String> {
-    match get_wireplumber_version() {
-        Ok(version) => {
-            println!("Detected WirePlumber version: {}", version);
-            // Use legacy config only for versions older than 0.5
-            let use_legacy = version < "0.5".to_string();
-            if use_legacy {
-                println!("Using legacy Lua configuration for WirePlumber < 0.5");
-            } else {
-                println!("Using modern JSON configuration for WirePlumber >= 0.5");
-            }
-            Ok(use_legacy)
-        }
-        Err(e) => {
-            println!(
-                "Could not detect WirePlumber version: {}, assuming modern version",
-                e
-            );
-            // If we can't detect version, assume modern and don't use legacy config
-            Ok(false)
-        }
     }
 }
 
@@ -1822,10 +1706,61 @@ fn write_config_with_privileges(config_path: &str, content: &str) -> Result<(), 
 }
 
 // ----------------------------------------------------------------------------
+// Wireplumber configuration
+// ----------------------------------------------------------------------------
+
+/// Applies device-specific audio settings via a WirePlumber SPA-JSON configuration fragment.
+pub fn apply_wireplumber_device_config(
+    settings: &AudioSettings,
+    stream_type: &str,
+) -> Result<(), String> {
+    println!("Applying WirePlumber device configuration...");
+
+    // Always generate SPA-JSON for WirePlumber >= 0.5
+    let config_content = generate_wireplumber_config(settings, stream_type);
+
+    let username = whoami::username();
+    // CRITICAL: Use the correct path and extension for WirePlumber >= 0.5
+    let config_path = if stream_type == "output" {
+        format!(
+            "/home/{}/.config/wireplumber/wireplumber.conf.d/99-pro-audio-output.conf",
+            username
+        )
+    } else {
+        format!(
+            "/home/{}/.config/wireplumber/wireplumber.conf.d/99-pro-audio-input.conf",
+            username
+        )
+    };
+
+    // Create the config directory if it doesn't exist
+    if let Some(parent) = Path::new(&config_path).parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    // Write the SPA-JSON configuration file
+    fs::write(&config_path, config_content)
+        .map_err(|e| format!("Failed to write WirePlumber config: {}", e))?;
+
+    println!(
+        "✓ WirePlumber SPA-JSON configuration created: {}",
+        config_path
+    );
+
+    // Restart services to apply the new config
+    restart_audio_services(true, false)?;
+
+    println!("✓ Audio services restarted successfully");
+    Ok(())
+}
+
+// ----------------------------------------------------------------------------
 // Service Management Functions
 // ----------------------------------------------------------------------------
 
 /// Aggressive restart that kills everything and forces restart
+#[allow(dead_code)]
 fn aggressive_restart_audio_services(system_wide: bool) -> Result<(), String> {
     println!("=== AGGRESSIVE AUDIO SERVICE RESTART ===");
 
@@ -1934,6 +1869,7 @@ fn check_if_services_are_running() -> bool {
 }
 
 /// Force PipeWire to reload configuration
+#[allow(dead_code)]
 fn force_pipewire_reload() -> Result<(), String> {
     println!("Forcing PipeWire to reload configuration...");
 
@@ -2122,6 +2058,7 @@ pub fn restart_audio_services_non_blocking() -> Result<(), String> {
 // ----------------------------------------------------------------------------
 
 /// Backup current audio settings
+#[allow(dead_code)]
 fn backup_audio_settings() -> Result<(), String> {
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
     let backup_dir = format!("/tmp/pro-audio-backup-{}", timestamp);
@@ -2518,93 +2455,6 @@ fn extract_number_from_line(line: &str) -> Option<u32> {
     } else {
         None
     }
-}
-
-/// Gets the WirePlumber version as a string
-fn get_wireplumber_version() -> Result<String, String> {
-    // Method 1: Try wireplumber --version directly
-    if let Ok(output) = Command::new("wireplumber").args(["--version"]).output() {
-        let version_output = String::from_utf8_lossy(&output.stdout);
-        for line in version_output.lines() {
-            if line.contains("WirePlumber")
-                || line.contains("wireplumber")
-                || line.contains("version")
-            {
-                // Look for version patterns like "0.5.12", "v0.4.14", etc.
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                for part in parts {
-                    // Extract version numbers like 0.5.12, 0.4.14, etc.
-                    let version_str = part.trim_matches(|c: char| !c.is_numeric() && c != '.');
-                    if version_str.chars().any(|c| c.is_numeric()) && version_str.contains('.') {
-                        let version_parts: Vec<&str> = version_str.split('.').collect();
-                        if version_parts.len() >= 2 {
-                            return Ok(format!("{}.{}", version_parts[0], version_parts[1]));
-                        }
-                        return Ok(version_str.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    // Method 2: Try package managers (distribution-specific)
-    let package_commands = [
-        ("rpm", &["-q", "wireplumber"] as &[&str]),
-        ("dpkg", &["-l", "wireplumber"]),
-        ("pacman", &["-Q", "wireplumber"]),
-        ("apk", &["info", "wireplumber"]),
-    ];
-
-    for (cmd, args) in &package_commands {
-        if let Ok(output) = Command::new(cmd).args(*args).output() {
-            if output.status.success() {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                // Extract version from package manager output
-                for line in output_str.lines() {
-                    // Look for version patterns in package output
-                    let words: Vec<&str> = line.split_whitespace().collect();
-                    for word in words {
-                        if word.chars().next().map_or(false, |c| c.is_numeric())
-                            && word.contains('.')
-                        {
-                            let version_parts: Vec<&str> = word.split('.').collect();
-                            if version_parts.len() >= 2 {
-                                return Ok(format!("{}.{}", version_parts[0], version_parts[1]));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Method 3: Try to find wireplumber binary and get version from path or ldd
-    if let Ok(output) = Command::new("which").arg("wireplumber").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            println!("Found wireplumber at: {}", path);
-
-            // If we found the binary but can't get version, assume modern
-            return Ok("0.5".to_string());
-        }
-    }
-
-    // Method 4: Check common installation paths
-    let common_paths = [
-        "/usr/bin/wireplumber",
-        "/usr/local/bin/wireplumber",
-        "/bin/wireplumber",
-    ];
-
-    for path in &common_paths {
-        if Path::new(path).exists() {
-            println!("Found wireplumber at: {}", path);
-            // If it exists but we can't determine version, assume modern
-            return Ok("0.5".to_string());
-        }
-    }
-
-    Err("Could not detect WirePlumber version - WirePlumber may not be installed".to_string())
 }
 
 /// Restart with quantum verification
