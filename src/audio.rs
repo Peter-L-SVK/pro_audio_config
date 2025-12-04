@@ -940,6 +940,7 @@ fn parse_device_capabilities(
 }
 
 // Helper function to get current default device name
+#[allow(dead_code)]
 fn detect_current_default_device_name() -> Result<String, String> {
     detect_output_audio_device().and_then(|device_info| {
         extract_actual_device_name(&device_info)
