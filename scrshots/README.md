@@ -6,10 +6,22 @@
 ![Inputs](scr2.png)  
 *(Default input selected)*  
 
-![About](scr3.png)  
+![Running the program](scr3.png)  
+*(Advanced global mode config)*  
+
+![Running the program](scr4.png)  
+*(Advanced global mode pro config)*  
+
+![Running the program](scr5.png)  
+*(Advanced mode app exclusive config)*  
+
+![Running the program](scr6.png)  
+*(Advanced mode app exclusive config)*  
+
+![About](scr7.png)  
 *(Help -> About)*  
 
-![License](scr4.png)  
+![License](scr8.png)  
 *(License)*  
 
 ---

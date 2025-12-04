@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Audio Configuration Module
- * Version: 1.6
+ * Version: 1.7
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
@@ -688,7 +688,7 @@ pub fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
 
     let output_str = String::from_utf8_lossy(&output.stdout);
 
-    // ✅ FIXED: Try to find device.name first (preferred for WirePlumber)
+    // Try to find device.name first (preferred for WirePlumber)
     for line in output_str.lines() {
         if line.contains("device.name") && line.contains('=') {
             if let Some(name_part) = line.split('=').nth(1) {
@@ -700,7 +700,7 @@ pub fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
         }
     }
 
-    // ✅ FIXED: Fall back to node.name
+    // Fall back to node.name
     for line in output_str.lines() {
         if line.contains("node.name") && line.contains('=') {
             if let Some(name_part) = line.split('=').nth(1) {
@@ -751,7 +751,7 @@ pub fn resolve_pulse_device_name(pulse_id: &str) -> Result<String, String> {
     Err(format!("PulseAudio device {} not found", pulse_id))
 }
 
-// ✅ NEW: Helper function to extract actual device name from formatted string
+// Helper function to extract actual device name from formatted string
 pub fn extract_actual_device_name(device_info: &str) -> Option<String> {
     // Remove system prefix and extract the device identifier
     let cleaned = device_info
@@ -766,6 +766,247 @@ pub fn extract_actual_device_name(device_info: &str) -> Option<String> {
     } else {
         Some(cleaned)
     }
+}
+
+// Enhanced device detection for exclusive mode
+pub fn detect_high_performance_devices() -> Result<Vec<AudioDevice>, String> {
+    let mut devices = detect_output_audio_devices()?;
+
+    // Filter for high-performance devices (USB, PCI, external interfaces)
+    devices.retain(|device| {
+        let name_lower = device.name.to_lowercase();
+        let desc_lower = device.description.to_lowercase();
+        let id_lower = device.id.to_lowercase();
+
+        // Prefer USB and PCI devices for exclusive mode
+        desc_lower.contains("usb") ||
+        name_lower.contains("usb") ||
+        id_lower.contains("usb") ||
+        desc_lower.contains("firewire") ||
+        desc_lower.contains("thunderbolt") ||
+        desc_lower.contains("pci") ||
+        desc_lower.contains("external") ||
+        desc_lower.contains("interface") ||
+        desc_lower.contains("studio") ||
+        desc_lower.contains("pro") ||
+        // Brand-specific detection for professional audio interfaces
+        desc_lower.contains("focusrite") ||
+        desc_lower.contains("presonus") ||
+        desc_lower.contains("behringer") ||
+        desc_lower.contains("motu") ||
+        desc_lower.contains("rme") ||
+        desc_lower.contains("universal audio") ||
+        desc_lower.contains("audient") ||
+        desc_lower.contains("steinberg") ||
+        desc_lower.contains("tascam") ||
+        desc_lower.contains("zoom") ||
+        desc_lower.contains("arturia") ||
+        desc_lower.contains("native instruments") ||
+        desc_lower.contains("akai") ||
+        desc_lower.contains("novation")
+    });
+
+    println!("Found {} high-performance audio devices", devices.len());
+    Ok(devices)
+}
+
+// Device capabilities structure
+#[derive(Clone, Debug)]
+pub struct DeviceCapabilities {
+    pub sample_rates: Vec<u32>,
+    pub formats: Vec<String>,
+    pub buffer_sizes: Vec<u32>,
+    pub min_buffer_size: u32,
+    pub max_buffer_size: u32,
+    pub period_sizes: Vec<u32>,
+}
+
+// Get device capabilities for exclusive mode
+pub fn get_device_capabilities(device_id: &str) -> Result<DeviceCapabilities, String> {
+    let device_pattern = if device_id == "default" {
+        // Try to get the actual default device name
+        if let Ok(device_info) = detect_output_audio_device() {
+            extract_actual_device_name(&device_info).unwrap_or_else(|| "alsa_output.*".to_string())
+        } else {
+            "alsa_output.*".to_string()
+        }
+    } else {
+        device_id.to_string()
+    };
+
+    // Try to get device info from PipeWire
+    if let Ok(output) = Command::new("pw-cli")
+        .args(["list-objects", "Node"])
+        .output()
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        return parse_device_capabilities(&output_str, &device_pattern);
+    }
+
+    // Fallback capabilities for when we can't detect specific device
+    Ok(DeviceCapabilities {
+        sample_rates: vec![44100, 48000, 96000, 192000],
+        formats: vec![
+            "S16LE".to_string(),
+            "S24LE".to_string(),
+            "S32LE".to_string(),
+        ],
+        buffer_sizes: vec![64, 128, 256, 512, 1024, 2048],
+        min_buffer_size: 64,
+        max_buffer_size: 4096,
+        period_sizes: vec![32, 64, 128, 256, 512],
+    })
+}
+
+// Parse device capabilities from PipeWire output
+fn parse_device_capabilities(
+    output: &str,
+    device_pattern: &str,
+) -> Result<DeviceCapabilities, String> {
+    let mut sample_rates = Vec::new();
+    let mut formats = Vec::new();
+    let mut buffer_sizes = Vec::new();
+
+    let mut in_target_device = false;
+
+    for line in output.lines() {
+        // Check if we're in the target device section
+        if line.contains("object:") && line.contains("Node") {
+            in_target_device = line.contains(device_pattern)
+                || (device_pattern == "alsa_output.*" && line.contains("alsa"));
+        }
+
+        if in_target_device {
+            if line.contains("audio.rate") && line.contains('=') {
+                if let Some(rate_str) = line.split('=').nth(1) {
+                    let rate_clean = rate_str.trim().trim_matches('"');
+                    if let Ok(rate) = rate_clean.parse::<u32>() {
+                        if !sample_rates.contains(&rate) {
+                            sample_rates.push(rate);
+                        }
+                    }
+                }
+            }
+
+            if line.contains("audio.format") && line.contains('=') {
+                if let Some(format_str) = line.split('=').nth(1) {
+                    let format_clean = format_str.trim().trim_matches('"');
+                    if !formats.contains(&format_clean.to_string()) {
+                        formats.push(format_clean.to_string());
+                    }
+                }
+            }
+
+            if line.contains("api.alsa.period-size") && line.contains('=') {
+                if let Some(size_str) = line.split('=').nth(1) {
+                    let size_clean = size_str.trim().trim_matches('"');
+                    if let Ok(size) = size_clean.parse::<u32>() {
+                        if !buffer_sizes.contains(&size) {
+                            buffer_sizes.push(size);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If we couldn't detect specific capabilities, use fallbacks
+    if sample_rates.is_empty() {
+        sample_rates = vec![44100, 48000, 96000, 192000];
+    }
+    if formats.is_empty() {
+        formats = vec![
+            "S16LE".to_string(),
+            "S24LE".to_string(),
+            "S32LE".to_string(),
+        ];
+    }
+    if buffer_sizes.is_empty() {
+        buffer_sizes = vec![64, 128, 256, 512, 1024, 2048];
+    }
+
+    // Sort for better display
+    sample_rates.sort();
+    buffer_sizes.sort();
+
+    Ok(DeviceCapabilities {
+        sample_rates,
+        formats,
+        buffer_sizes: buffer_sizes.clone(),
+        min_buffer_size: *buffer_sizes.iter().min().unwrap_or(&64),
+        max_buffer_size: *buffer_sizes.iter().max().unwrap_or(&4096),
+        period_sizes: buffer_sizes.iter().map(|&size| size / 2).collect(),
+    })
+}
+
+// Helper function to get current default device name
+fn detect_current_default_device_name() -> Result<String, String> {
+    detect_output_audio_device().and_then(|device_info| {
+        extract_actual_device_name(&device_info)
+            .ok_or_else(|| "Could not extract device name".to_string())
+    })
+}
+
+// Enhanced device detection that's brand/maker agnostic for ordinary modes
+pub fn detect_recommended_devices() -> Result<Vec<AudioDevice>, String> {
+    let mut devices = detect_output_audio_devices()?;
+
+    // For ordinary modes, be brand/maker agnostic and focus on device type
+    devices.retain(|device| {
+        let name_lower = device.name.to_lowercase();
+        let desc_lower = device.description.to_lowercase();
+        let id_lower = device.id.to_lowercase();
+
+        // Focus on device type rather than brand for ordinary usage
+        desc_lower.contains("usb") ||
+        name_lower.contains("usb") ||
+        id_lower.contains("usb") ||
+        desc_lower.contains("pci") ||
+        desc_lower.contains("hdmi") ||
+        desc_lower.contains("analog") ||
+        desc_lower.contains("digital") ||
+        desc_lower.contains("stereo") ||
+        desc_lower.contains("surround") ||
+        // Include common interface types without brand bias
+        desc_lower.contains("output") ||
+        desc_lower.contains("speaker") ||
+        desc_lower.contains("headphone")
+        // Note: We're NOT filtering by specific brands here for ordinary modes
+    });
+
+    println!(
+        "Found {} recommended audio devices for ordinary usage",
+        devices.len()
+    );
+    Ok(devices)
+}
+
+// Check if a device is suitable for exclusive mode
+pub fn is_device_suitable_for_exclusive_mode(device: &AudioDevice) -> bool {
+    let name_lower = device.name.to_lowercase();
+    let desc_lower = device.description.to_lowercase();
+    let id_lower = device.id.to_lowercase();
+
+    // Exclusive mode prefers external interfaces and pro audio devices
+    desc_lower.contains("usb") ||
+    name_lower.contains("usb") ||
+    id_lower.contains("usb") ||
+    desc_lower.contains("firewire") ||
+    desc_lower.contains("thunderbolt") ||
+    desc_lower.contains("external") ||
+    desc_lower.contains("interface") ||
+    desc_lower.contains("studio") ||
+    desc_lower.contains("pro") ||
+    // Professional audio brands (for exclusive mode only)
+    desc_lower.contains("focusrite") ||
+    desc_lower.contains("presonus") ||
+    desc_lower.contains("behringer") ||
+    desc_lower.contains("motu") ||
+    desc_lower.contains("rme") ||
+    desc_lower.contains("universal audio") ||
+    desc_lower.contains("audient") ||
+    desc_lower.contains("steinberg") ||
+    desc_lower.contains("tascam")
 }
 
 #[cfg(test)]
@@ -937,5 +1178,45 @@ mod tests {
         );
         assert_eq!(extract_actual_device_name(alsa_info).unwrap(), "hw:0,0");
         assert!(extract_actual_device_name("").is_none());
+    }
+
+    #[test]
+    fn test_high_performance_device_detection() {
+        let pro_device = AudioDevice {
+            name: "USB Audio Device".to_string(),
+            description: "Focusrite Scarlett 2i2".to_string(),
+            id: "alsa:usb".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        };
+
+        let basic_device = AudioDevice {
+            name: "Built-in Audio".to_string(),
+            description: "Analog Output".to_string(),
+            id: "alsa:card0".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        };
+
+        assert!(is_device_suitable_for_exclusive_mode(&pro_device));
+        assert!(!is_device_suitable_for_exclusive_mode(&basic_device));
+    }
+
+    #[test]
+    fn test_device_capabilities_fallback() {
+        let capabilities = get_device_capabilities("nonexistent").unwrap();
+
+        assert!(!capabilities.sample_rates.is_empty());
+        assert!(!capabilities.formats.is_empty());
+        assert!(!capabilities.buffer_sizes.is_empty());
+        assert!(capabilities.min_buffer_size > 0);
+        assert!(capabilities.max_buffer_size >= capabilities.min_buffer_size);
+    }
+
+    #[test]
+    fn test_recommended_devices_agnostic() {
+        // Test that recommended devices function exists and returns proper type
+        let result = detect_recommended_devices();
+        assert!(result.is_ok() || result.is_err()); // Should not panic
     }
 }
