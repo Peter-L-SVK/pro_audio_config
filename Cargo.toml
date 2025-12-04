@@ -1,15 +1,41 @@
 [package]
-name = "pro-audio-config"
-version = "0.1.0"
-edition = "2021"
+name = "pro_audio_config"
+version = "1.7.0"
+authors = ["Peter Leukanič"]
+edition = "2024"
+description = "A professional audio configuration tool for Linux systems"
+license = "MIT"
+repository = "https://github.com/Peter-L-SVK/pro-audio-config"
+readme = "README.md"
 
 [dependencies]
-gtk = { version = "0.15", features = ["v3_22"] }
-gio = "0.15"
-glib = "0.15"
-dirs = "5.0"
-async-channel = "2.0"
-whoami = "1.0"
+gtk = { version = "0.18.2", features = ["v3_24"] }
+gio = "0.21"
+glib = { version = "0.21", features = ["v2_80"] }
+glob = "0.3"
+dirs = "6.0"
+chrono = "0.4.42"
+directories = "6.0"
+whoami = "1.6"
+shellexpand = "3.1"
+toml = "0.9.8"
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
-mockall = "0.11"
+mockall = "0.14"
+tempfile = "3.23" 
+pro_audio_config = { path = "." }
+
+[profile.test]
+panic = "abort" 
+
+[package.metadata.deb]
+maintainer = "Peter Leukanič"
+copyright = "2025, Peter Leukanič"
+depends = "$auto, pipewire-alsa, wireplumber, policykit-1"
+section = "sound"
+assets = [
+    ["target/release/pro-audio-config", "usr/bin/", "755"],
+    ["icons/48x48/icon.png", "usr/share/icons/hicolor/48x48/apps/pro-audio-config.png", "644"],
+    ["pro-audio-config.desktop", "usr/share/applications/", "644"],
+]

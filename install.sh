@@ -30,7 +30,7 @@ sudo mkdir -p /usr/local/share/applications/
 
 # Copy the binary
 echo "Installing binary..."
-sudo cp target/release/pro-audio-config /usr/local/bin/pro-audio-config
+sudo cp target/release/pro_audio_config /usr/local/bin/pro-audio-config
 
 # Copy the icons (only if they exist)
 echo "Installing icons..."
