@@ -6,7 +6,7 @@ A professional audio configuration tool for Linux systems that provides a simple
 
 ## Why This Exists
 
-After 10 years of using Fedora and other Linux distributions, I realized we're still missing a fundamental tool: a simple, graphical way to configure professional audio settings. In 2025, manually editing configuration files shouldn't be the only option for adjusting basic audio parameters. If you wish to support me for future updates with some symbolic donation, BuyMeCoffe button.
+After 10 years of using Fedora and other Linux distributions, I realized we're still missing a fundamental tool: a simple, graphical way to configure professional audio settings. In 2025, manually editing configuration files shouldn't be the only option for adjusting basic audio parameters. If you wish to support me for future updates with some symbolic donation, BuyMeACoffe button.
 
 ![Running the program](scrshots/scr1.png)  
 *(Program running)*
