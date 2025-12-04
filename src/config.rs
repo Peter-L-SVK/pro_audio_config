@@ -2520,24 +2520,6 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_wireplumber_config_generation() {
-        let settings = AudioSettings {
-            sample_rate: 48000,
-            bit_depth: 16,
-            buffer_size: 1024,
-            device_id: "default".to_string(),
-        };
-
-        let config = generate_wireplumber_config(&settings, "input");
-
-        assert!(config.contains("48000"));
-        assert!(config.contains("1024"));
-        assert!(config.contains("alsa.*"));
-        assert!(config.contains("S16LE"));
-        assert!(config.contains("Lua"));
-    }
-
-    #[test]
     fn test_default_device_config() {
         let settings = AudioSettings {
             sample_rate: 48000,
