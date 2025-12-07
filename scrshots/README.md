@@ -18,6 +18,9 @@
 ![Running the program](scr6.png)  
 *(Advanced mode app exclusive config)*  
 
+![Running the program](scr9.png)  
+*(In the task manager)*  
+
 ![About](scr7.png)  
 *(Help -> About)*  
 
