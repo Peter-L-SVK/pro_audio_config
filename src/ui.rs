@@ -2180,7 +2180,7 @@ pub fn show_about_dialog() {
 
     dialog.set_title("About Pro Audio Config");
     dialog.set_program_name("Pro Audio Config");
-    dialog.set_version(Some("1.7"));
+    dialog.set_version(Some("1.8"));
     dialog.set_website(Some("https://github.com/Peter-L-SVK/pro_audio_config"));
     dialog.set_copyright(Some("Copyright © 2025 Peter Leukanič"));
     dialog.set_authors(&["Peter Leukanič"]);

@@ -21,6 +21,9 @@
 ![Running the program](scr9.png)  
 *(In the task manager)*  
 
+![Running the program](scr10.png)  
+*(Monitoring)*  
+
 ![About](scr7.png)  
 *(Help -> About)*  
 

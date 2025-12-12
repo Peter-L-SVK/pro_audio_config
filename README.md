@@ -13,8 +13,18 @@ After 10 years of using Fedora and other Linux distributions, I realized we're s
 
 ## Features
 
-All current features are showcased in the  [Gallery](https://github.com/Peter-L-SVK/pro_audio_config/blob/main/scrshots/README.md) 
+All current features are showcased in the  [Gallery](https://github.com/Peter-L-SVK/pro_audio_config/blob/main/scrshots/README.md)
 
+### 🎚️ **Real-time Audio Monitoring Tab**
+- **Live Audio Level Meters**: Visual monitoring of stereo channel output levels with real-time PipeWire integration
+- **Color-coded Visual Feedback**: Safe (green), warning (yellow), and clipping (red) zones with blinking indicators
+- **Real System Audio Monitoring**: Taps into PipeWire monitor sources for accurate system-wide audio level measurement
+- **Smooth Meter Animation**: 10 FPS updates with proper threading for responsive UI performance
+- **DB Scale Display**: Accurate decibel readings with peak and RMS calculations
+- **Auto-detection Fallback**: Intelligent fallback to simulation mode when PipeWire isn't available
+- **Professional Metering**: Studio-grade level monitoring with proper threshold matching industry standards
+
+### 🔧 **Device and Configuration Management**
 - **Device Detection**: Automatically detects and displays current audio devices (PipeWire, ALSA, PulseAudio)
 - **Sample Rate Configuration**: Support for rates from 44.1 kHz to 384 kHz
 - **Bit Depth Settings**: 16-bit, 24-bit, and 32-bit audio formats
@@ -24,12 +34,13 @@ All current features are showcased in the  [Gallery](https://github.com/Peter-L
 - **No Terminal Required**: Graphical interface that anyone can use
 - **Privilege Escalation**: Secure privilege escalation for system-level audio configuration
 
-### Multi-Tab Interface
+### 🗂️ **Multi-Tab Interface**
 - **Separate Input/Output Configuration**: Dedicated tabs for playback (output) and recording (input) devices
+- **Real-time Monitoring Tab**: Dedicated monitoring interface with live audio meters
 - **Independent Settings Management**: Configure input and output devices with different sample rates, bit depths, and buffer sizes
-- **Clear Visual Separation**: Intuitive tabbed interface that clearly distinguishes between recording and playback settings
+- **Clear Visual Separation**: Intuitive tabbed interface that clearly distinguishes between recording, playback, and monitoring functions
 
-### Advanced Tab Features
+### ⚡ **Advanced Tab Features**
 - **Configuration Modes**: Switch between Global System Settings and Exclusive Mode
 - **Professional Audio Settings**: Fine-tune buffer size ranges, thread priorities, and memory locking
 - **Exclusive Mode**: Direct hardware access for single applications (similar to ASIO/WASAPI exclusive mode)
@@ -38,12 +49,12 @@ All current features are showcased in the  [Gallery](https://github.com/Peter-L
 - **Resampling Control**: Adjust resampler quality or disable automatic resampling entirely
 - **Channel Management**: Option to disable automatic channel remixing for professional workflows
 
-### Configuration Scope
+### 🔍 **Configuration Scope**
 - **User-Specific Configuration**: Apply settings only for the current user (default)
 - **System-Wide Configuration**: Apply settings for all users on the system (requires admin privileges)
 - **Flexible Deployment**: Choose between user-specific or system-wide configuration based on your needs
 
-### Advanced Configuration
+### 🛠️ **Advanced Configuration**
 - **Dedicated WirePlumber Configs**: Separate configuration generators for input vs output devices
 - **Independent Signal Handlers**: Each tab manages its own settings and apply operations
 - **Comprehensive Testing**: Extensive test suite covering new input/output separation features
@@ -69,18 +80,16 @@ This tool is designed to grow with PipeWire and Linux audio:
 
 As audio companies improve their Linux driver support and PipeWire continues to evolve, this tool will be ready to leverage those advancements immediately.
 
-
 ## Roadmap
 
-- [ ] Package manager support (RPM/DEB/Flatpak)
+- [x] **Real-time Audio Monitoring** - Live level meters with PipeWire integration
 - [x] Setting all available devices in one session
 - [x] Separate input/output configuration tabs
 - [x] User vs system-wide configuration scope
+- [ ] Package manager support (RPM/DEB/Flatpak)
 - [ ] Additional audio backends (JACK)
 - [ ] Preset configurations
 - [x] Advanced audio routing
-- [x] Real-time audio monitoring
-
 
 ## Installation
 
