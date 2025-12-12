@@ -247,6 +247,7 @@ For support and questions:
 
 ### System Dependencies
 - PipeWire (recommended) or PulseAudio
+- pipewire-devel (for building the app)
 - WirePlumber
 - ALSA utilities
 - pkexec (for privilege escalation)
