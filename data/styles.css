@@ -1,0 +1,61 @@
+.level-safe progressbar trough,
+.level-safe progressbar progress {
+    background-color: #26A269; /* Green */
+}
+
+.level-warning progressbar trough,  
+.level-warning progressbar progress {
+    background-color: #E5A50A; /* Yellow */
+}
+
+.level-danger progressbar trough,
+.level-danger progressbar progress {
+    background-color: #C01C28; /* Red */
+}
+
+progressbar.clipping progress {
+    background-color: #FF0000; /* Bright red for clipping */
+    animation: blink 1s infinite;
+}
+
+@keyframes blink {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+/* NEW: Audio meter indicator styles */
+.level-safe {
+    background-color: #26A269; /* Green */
+}
+
+.level-warning {
+    background-color: #E5A50A; /* Yellow */
+}
+
+.level-danger {
+    background-color: #C01C28; /* Red */
+}
+
+/* Style for the small indicators in the key */
+.level-indicator {
+    min-width: 16px;
+    min-height: 16px;
+    border-radius: 2px;
+}
+
+/* Progress bar text styling */
+progressbar {
+    color: #FFFFFF;
+    font-weight: bold;
+}
+
+/* Make the progress bars look nicer */
+progressbar trough {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+}
+
+progressbar progress {
+    border-radius: 3px;
+}

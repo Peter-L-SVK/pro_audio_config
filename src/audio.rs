@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Audio Configuration Module
- * Version: 1.7
+ * Version: 1.8
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
@@ -8,7 +8,28 @@
  * Core audio device detection and system interaction
  */
 
+use lazy_static::lazy_static;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+// Add caching for expensive operations
+lazy_static! {
+    static ref CACHED_AUDIO_SETTINGS: Arc<Mutex<Option<(AudioSettings, Instant)>>> =
+        Arc::new(Mutex::new(None));
+    static ref CACHED_OUTPUT_DEVICES: Arc<Mutex<Option<(Vec<AudioDevice>, Instant)>>> =
+        Arc::new(Mutex::new(None));
+    static ref CACHED_INPUT_DEVICES: Arc<Mutex<Option<(Vec<AudioDevice>, Instant)>>> =
+        Arc::new(Mutex::new(None));
+    static ref CACHED_ALL_DEVICES: Arc<Mutex<Option<(Vec<AudioDevice>, Instant)>>> =
+        Arc::new(Mutex::new(None));
+    static ref CACHED_CURRENT_OUTPUT_DEVICE: Arc<Mutex<Option<(String, Instant)>>> =
+        Arc::new(Mutex::new(None));
+    static ref CACHED_CURRENT_INPUT_DEVICE: Arc<Mutex<Option<(String, Instant)>>> =
+        Arc::new(Mutex::new(None));
+}
+
+const CACHE_DURATION: Duration = Duration::from_secs(2); // Cache for 2 seconds
 
 #[derive(Clone, Debug)]
 pub struct AudioDevice {
@@ -116,6 +137,14 @@ fn is_valid_device_id(device_id: &str) -> bool {
 
 // Device Detection Functions
 pub fn detect_all_audio_devices() -> Result<Vec<AudioDevice>, String> {
+    // Check cache first
+    if let Some(cached) = CACHED_ALL_DEVICES.lock().unwrap().as_ref() {
+        if cached.1.elapsed() < CACHE_DURATION {
+            println!("DEBUG: Returning cached all devices");
+            return Ok(cached.0.clone());
+        }
+    }
+
     let mut devices = Vec::new();
 
     println!("=== Scanning for all audio devices ===");
@@ -131,11 +160,22 @@ pub fn detect_all_audio_devices() -> Result<Vec<AudioDevice>, String> {
     devices.extend(detect_pulse_devices()?);
 
     println!("Found {} audio devices", devices.len());
+
+    // Update cache
+    *CACHED_ALL_DEVICES.lock().unwrap() = Some((devices.clone(), Instant::now()));
     Ok(devices)
 }
 
 // New functions for separate input/output detection
 pub fn detect_output_audio_devices() -> Result<Vec<AudioDevice>, String> {
+    // Check cache first
+    if let Some(cached) = CACHED_OUTPUT_DEVICES.lock().unwrap().as_ref() {
+        if cached.1.elapsed() < CACHE_DURATION {
+            println!("DEBUG: Returning cached output devices");
+            return Ok(cached.0.clone());
+        }
+    }
+
     let mut devices = Vec::new();
 
     println!("=== Scanning for output audio devices ===");
@@ -157,10 +197,21 @@ pub fn detect_output_audio_devices() -> Result<Vec<AudioDevice>, String> {
         .collect();
 
     println!("Found {} output audio devices", output_devices.len());
+
+    // Update cache
+    *CACHED_OUTPUT_DEVICES.lock().unwrap() = Some((output_devices.clone(), Instant::now()));
     Ok(output_devices)
 }
 
 pub fn detect_input_audio_devices() -> Result<Vec<AudioDevice>, String> {
+    // Check cache first
+    if let Some(cached) = CACHED_INPUT_DEVICES.lock().unwrap().as_ref() {
+        if cached.1.elapsed() < CACHE_DURATION {
+            println!("DEBUG: Returning cached input devices");
+            return Ok(cached.0.clone());
+        }
+    }
+
     let mut devices = Vec::new();
 
     println!("=== Scanning for input audio devices ===");
@@ -182,6 +233,9 @@ pub fn detect_input_audio_devices() -> Result<Vec<AudioDevice>, String> {
         .collect();
 
     println!("Found {} input audio devices", input_devices.len());
+
+    // Update cache
+    *CACHED_INPUT_DEVICES.lock().unwrap() = Some((input_devices.clone(), Instant::now()));
     Ok(input_devices)
 }
 
@@ -506,6 +560,14 @@ pub fn detect_audio_device() -> Result<String, String> {
 
 // New functions for detecting current input/output devices
 pub fn detect_output_audio_device() -> Result<String, String> {
+    // Check cache first
+    if let Some(cached) = CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap().as_ref() {
+        if cached.1.elapsed() < CACHE_DURATION {
+            println!("DEBUG: Returning cached output device");
+            return Ok(cached.0.clone());
+        }
+    }
+
     let audio_system = detect_audio_system();
 
     if let Ok(output) = Command::new("pactl").args(["info"]).output() {
@@ -514,16 +576,31 @@ pub fn detect_output_audio_device() -> Result<String, String> {
             for line in output_str.lines() {
                 if line.starts_with("Default Sink:") {
                     let sink = line.replace("Default Sink:", "").trim().to_string();
-                    return Ok(format!("{}: {}", audio_system, sink));
+                    let result = format!("{}: {}", audio_system, sink);
+
+                    // Update cache
+                    *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() =
+                        Some((result.clone(), Instant::now()));
+                    return Ok(result);
                 }
             }
         }
     }
 
-    Ok(format!("{}: Unknown Output Audio Device", audio_system))
+    let result = format!("{}: Unknown Output Audio Device", audio_system);
+    *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() = Some((result.clone(), Instant::now()));
+    Ok(result)
 }
 
 pub fn detect_input_audio_device() -> Result<String, String> {
+    // Check cache first
+    if let Some(cached) = CACHED_CURRENT_INPUT_DEVICE.lock().unwrap().as_ref() {
+        if cached.1.elapsed() < CACHE_DURATION {
+            println!("DEBUG: Returning cached input device");
+            return Ok(cached.0.clone());
+        }
+    }
+
     let audio_system = detect_audio_system();
 
     if let Ok(output) = Command::new("pactl").args(["info"]).output() {
@@ -532,16 +609,31 @@ pub fn detect_input_audio_device() -> Result<String, String> {
             for line in output_str.lines() {
                 if line.starts_with("Default Source:") {
                     let source = line.replace("Default Source:", "").trim().to_string();
-                    return Ok(format!("{}: {}", audio_system, source));
+                    let result = format!("{}: {}", audio_system, source);
+
+                    // Update cache
+                    *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() =
+                        Some((result.clone(), Instant::now()));
+                    return Ok(result);
                 }
             }
         }
     }
 
-    Ok(format!("{}: Unknown Input Audio Device", audio_system))
+    let result = format!("{}: Unknown Input Audio Device", audio_system);
+    *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() = Some((result.clone(), Instant::now()));
+    Ok(result)
 }
 
 pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
+    // Check cache first
+    if let Some(cached) = CACHED_AUDIO_SETTINGS.lock().unwrap().as_ref() {
+        if cached.1.elapsed() < CACHE_DURATION {
+            println!("DEBUG: Returning cached audio settings");
+            return Ok(cached.0.clone());
+        }
+    }
+
     println!("=== DEBUG: Starting audio settings detection ===");
 
     // Try PipeWire first
@@ -560,12 +652,13 @@ pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
                 "DEBUG: Parsed values - {}Hz/{}bit/{}samples",
                 sample_rate, bit_depth, buffer_size
             );
-            return Ok(AudioSettings::new(
-                sample_rate,
-                bit_depth,
-                buffer_size,
-                "default".to_string(),
-            ));
+
+            let settings =
+                AudioSettings::new(sample_rate, bit_depth, buffer_size, "default".to_string());
+
+            // Update cache
+            *CACHED_AUDIO_SETTINGS.lock().unwrap() = Some((settings.clone(), Instant::now()));
+            return Ok(settings);
         } else {
             println!("DEBUG: pw-cli failed with status: {}", output.status);
             let error_output = String::from_utf8_lossy(&output.stderr);
@@ -576,7 +669,11 @@ pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
     }
 
     println!("DEBUG: Falling back to default values");
-    Ok(AudioSettings::new(48000, 24, 512, "default".to_string()))
+    let settings = AudioSettings::new(48000, 24, 512, "default".to_string());
+
+    // Update cache
+    *CACHED_AUDIO_SETTINGS.lock().unwrap() = Some((settings.clone(), Instant::now()));
+    Ok(settings)
 }
 
 fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
@@ -648,7 +745,7 @@ fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
     (sample_rate, bit_depth, buffer_size)
 }
 
-fn detect_audio_system() -> String {
+pub fn detect_audio_system() -> String {
     // Check PipeWire
     if Command::new("pw-cli").args(["info", "0"]).output().is_ok()
         || Command::new("systemctl")
@@ -1008,6 +1105,16 @@ pub fn is_device_suitable_for_exclusive_mode(device: &AudioDevice) -> bool {
     desc_lower.contains("audient") ||
     desc_lower.contains("steinberg") ||
     desc_lower.contains("tascam")
+}
+
+// Clear cache - useful when settings are changed
+pub fn clear_cache() {
+    *CACHED_AUDIO_SETTINGS.lock().unwrap() = None;
+    *CACHED_OUTPUT_DEVICES.lock().unwrap() = None;
+    *CACHED_INPUT_DEVICES.lock().unwrap() = None;
+    *CACHED_ALL_DEVICES.lock().unwrap() = None;
+    *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() = None;
+    *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() = None;
 }
 
 #[cfg(test)]

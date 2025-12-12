@@ -7,7 +7,7 @@ echo "=== Installing Pro Audio Config ==="
 
 # Build the release binary
 echo "Building the application..."
-cargo build --release
+cargo build --release --features pipewire-monitoring
 
 # Create directories if they don't exist
 echo "Creating installation directories..."

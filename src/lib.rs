@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Library
- * Version: 1.7
+ * Version: 1.8
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
@@ -9,7 +9,9 @@
  */
 
 pub mod audio;
+pub mod audio_capture;
 pub mod config;
+pub mod monitoring;
 pub mod ui;
 pub mod utils;
 
@@ -49,6 +51,7 @@ pub use config::{
     update_audio_settings,
 };
 
+pub use monitoring::MonitoringTab;
 pub use ui::{AudioApp, create_section_box, show_error_dialog, show_success_dialog};
 
 #[cfg(test)]

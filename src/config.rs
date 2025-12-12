@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Configuration Module
- * Version: 1.7
+ * Version: 1.8
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  *
@@ -1525,6 +1525,7 @@ fn apply_audio_settings_with_auth(
     match update_audio_settings(&settings, true) {
         Ok(()) => {
             println!("✓ Applied via PipeWire configuration");
+            println!("✓ Settings applied successfully - monitoring tab should refresh");
             return Ok(());
         }
         Err(e) => {

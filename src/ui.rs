@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - User Interface Module
- * Version: 1.7
+ * Version: 1.8
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
@@ -32,6 +32,8 @@ use crate::config::{
     apply_output_audio_settings_with_auth_blocking, apply_user_audio_settings,
 };
 
+use crate::monitoring::MonitoringTab;
+
 #[derive(Clone)]
 pub struct AudioApp {
     pub window: ApplicationWindow,
@@ -39,6 +41,7 @@ pub struct AudioApp {
     pub output_tab: AudioTab,
     pub input_tab: AudioTab,
     pub advanced_tab: AdvancedTab,
+    pub monitoring_tab: MonitoringTab,
 }
 
 #[derive(Clone)]
@@ -270,6 +273,11 @@ impl AudioApp {
         let advanced_label = Label::new(Some("Advanced"));
         notebook.append_page(&advanced_tab.container, Some(&advanced_label));
 
+        // Create monitoring tab
+        let monitoring_tab = MonitoringTab::new();
+        let monitoring_label = Label::new(Some("Monitor"));
+        notebook.append_page(&monitoring_tab.container, Some(&monitoring_label));
+
         main_box.pack_start(&notebook, true, true, 0);
         scrolled_window.add(&main_box);
         window.add(&scrolled_window);
@@ -280,6 +288,7 @@ impl AudioApp {
             output_tab,
             input_tab,
             advanced_tab,
+            monitoring_tab,
         };
 
         // ===== CONNECT SIGNALS =====
@@ -2171,7 +2180,7 @@ pub fn show_about_dialog() {
 
     dialog.set_title("About Pro Audio Config");
     dialog.set_program_name("Pro Audio Config");
-    dialog.set_version(Some("1.7"));
+    dialog.set_version(Some("1.8"));
     dialog.set_website(Some("https://github.com/Peter-L-SVK/pro_audio_config"));
     dialog.set_copyright(Some("Copyright © 2025 Peter Leukanič"));
     dialog.set_authors(&["Peter Leukanič"]);
