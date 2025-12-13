@@ -102,10 +102,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 2. Install dependencies for app building:
 ```bash
-# Fedora/Centos/RHEL/Rocky
+# Fedora/CentOS-Stream/RHEL/Rocky
 sudo dnf install  pipewire-devel clang llvm-dev gtk3-devel
 
-# Ubuntu/Debian/Mint/PopOS
+# Ubuntu/Debian/Mint/Pop_OS/ZorinOS
 sudo apt install libpipewire-0.3-dev clang llvm-dev libgtk-3-dev
 ```
 ### Quick Install
