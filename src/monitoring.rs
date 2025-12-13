@@ -20,8 +20,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::audio_capture::auto_connect_monitor_delayed;
-use crate::audio_capture::{AudioLevels, PipeWireMonitor};
+use crate::audio_capture::PipeWireMonitor;
 
 // Message types for thread communication
 #[derive(Debug, Clone)]
