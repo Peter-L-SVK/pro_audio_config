@@ -247,8 +247,8 @@ For support and questions:
 
 ### System Dependencies
 - PipeWire (recommended) or PulseAudio
-- pipewire-devel (for building the app)
-- clang and libclang-devel (on redhat systems called: llvm-devel)
+- pipewire-devel redhat based/ libpipewire-0.3-dev for debian/ubuntu based (for building the app)
+- clang and llvm-devel (for building the app)
 - WirePlumber
 - ALSA utilities
 - pkexec (for privilege escalation)

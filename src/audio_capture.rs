@@ -8,7 +8,6 @@
  */
 
 use bytemuck;
-use lazy_static::lazy_static;
 use std::f32;
 use std::process::Command;
 use std::sync::Arc;
@@ -292,7 +291,7 @@ impl PipeWireMonitor {
         use libspa::utils::Direction;
         use pipewire as pw;
         use std::ffi::CString;
-        use std::process::Command;
+
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         // Initialize PipeWire
