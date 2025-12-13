@@ -248,7 +248,7 @@ For support and questions:
 ### System Dependencies
 - PipeWire (recommended) or PulseAudio
 - pipewire-devel (for building the app)
-- clang and libclang-devel(on redhat llvm-devel)
+- clang and libclang-devel (on redhat systems called: llvm-devel)
 - WirePlumber
 - ALSA utilities
 - pkexec (for privilege escalation)
@@ -258,7 +258,7 @@ For support and questions:
 - Cargo
 
 ### GTK Development Libraries
-- gtk3-devel (or equivalent for your distribution)
+- gtk3-devel (or equivalent for your distribution, on debian+ubuntu based: libgtk-3-dev)
 
 ## Acknowledgments
 
