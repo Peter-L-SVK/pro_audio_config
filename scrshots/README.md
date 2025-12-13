@@ -28,6 +28,9 @@
 *(Running program in VM Ware on Fedora Jam with KDE Plasma 6.5 "dark breeze" theme)*  
 About Feadora jam - [Fedora Jam](https://www.fedoraproject.org/labs/jam)
 
+![Running the program in VM Ware](scr12.png)  
+*(Running program in VM Ware on Mint 22.2 Zara MATE default theme)*  
+
 ![About](scr7.png)  
 *(Help -> About)*  
 

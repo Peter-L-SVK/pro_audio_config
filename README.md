@@ -13,7 +13,7 @@ After 10 years of using Fedora and other Linux distributions, I realized we're s
 
 ## Features
 
-All current features are showcased in the  [Gallery](https://github.com/Peter-L-SVK/pro_audio_config/blob/main/scrshots/README.md)
+All current features and running on different OSes are showcased in the  [Gallery](https://github.com/Peter-L-SVK/pro_audio_config/blob/main/scrshots/README.md)
 
 ### 🎚️ **Real-time Audio Monitoring Tab**
 - **Live Audio Level Meters**: Visual monitoring of stereo channel output levels with real-time PipeWire integration
@@ -93,6 +93,21 @@ As audio companies improve their Linux driver support and PipeWire continues to 
 
 ## Installation
 
+### Setup
+
+1. Install rust and cargo:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+2. Install dependencies for app building:
+```bash
+# Fedora/Centos/RHEL/Rocky
+sudo dnf install  pipewire-devel clang llvm-dev gtk3-devel
+
+# Ubuntu/Debian/Mint/PopOS
+sudo apt install libpipewire-0.3-dev clang llvm-dev libgtk-3-dev
+```
 ### Quick Install
 ```bash
 git clone https://github.com/Peter-L-SVK/pro_audio_config
@@ -248,7 +263,7 @@ For support and questions:
 ### System Dependencies
 - PipeWire (recommended) or PulseAudio
 - pipewire-devel redhat based/ libpipewire-0.3-dev for debian/ubuntu based (for building the app)
-- clang and llvm-devel (for building the app)
+- clang and llvm-dev (for building the app)
 - WirePlumber
 - ALSA utilities
 - pkexec (for privilege escalation)
@@ -259,6 +274,16 @@ For support and questions:
 
 ### GTK Development Libraries
 - gtk3-devel (or equivalent for your distribution, on debian+ubuntu based: libgtk-3-dev)
+
+### Tested on
+- Fedora 42 Cinnamon (fully works)
+- Fedora 43 Jam with Plasma 6.5 (fully works)
+- Mint MATE 22.2 Zara (fully works)
+- Ubuntu MATE 24.04.03 LTS (fully works)
+- Pop!_OS 24.04 LTS Cosmic desktop (live monitor isn't showing activity due to Cosmic UI differency but config and info showing works)
+
+**Note:** Since this works on more conservative Ubuntu LTS based systems, newer non LTS Ubuntu OSes will defintelly work...
+
 
 ## Acknowledgments
 
