@@ -107,10 +107,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh # select 1
 2. Install dependencies for app building:
 ```bash
 # Fedora/Centos/RHEL/Rocky
-sudo dnf install  pipewire-devel clang llvm-dev gtk3-devel # pkg-config add in Manjaro
+sudo dnf install  pipewire-devel clang llvm-dev gtk3-devel
 
 # Arch/EndeavourOS/Manjaro/arch-based
-sudo pacman -S pipewire clang llvm gtk3
+sudo pacman -S pipewire clang llvm gtk3 # pkg-config add in Manjaro
 
 # Ubuntu/Debian/Mint/PopOS
 sudo apt install libpipewire-0.3-dev clang llvm-dev libgtk-3-dev
@@ -118,7 +118,7 @@ sudo apt install libpipewire-0.3-dev clang llvm-dev libgtk-3-dev
 
 ### Quick Install
 ```bash
-git clone https://github.com/Peter-L-SVK/pro_audio_config
+git clone https://github.com/Peter-L-SVK/pro_audio_config # or download as zip manually and unzip
 cd pro_audio_config
 ./install.sh
 ```
