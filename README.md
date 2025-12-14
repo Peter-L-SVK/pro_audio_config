@@ -277,10 +277,10 @@ For support and questions:
 
 ### Tested on
 - Fedora 42 Cinnamon (fully works)
-- Fedora 43 Jam with Plasma 6.5 (fully works)
+- Fedora 43 Jam with KDE Plasma 6.5 (fully works)
 - Mint MATE 22.2 Zara (fully works)
 - Ubuntu MATE 24.04.03 LTS (fully works)
-- Pop!_OS 24.04 LTS Cosmic desktop (live monitor isn't showing activity due to Cosmic UI differency but config and info showing works)
+- Pop!_OS 24.04 LTS Cosmic desktop (live monitor isn't showing activity due to Cosmic UI differency, but configs and info showing works)
 
 **Note:** Since this works on more conservative Ubuntu LTS based systems, newer non LTS Ubuntu OSes will defintelly work...
 
