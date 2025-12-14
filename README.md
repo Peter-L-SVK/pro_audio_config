@@ -1,6 +1,6 @@
 # Pro Audio Config <div style="text-align: right">[![Rust CI](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml/badge.svg)](https://github.com/Peter-L-SVK/pro_audio_config/actions/workflows/rust-ci.yml)</div>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) <a href="https://buymeacoffee.com/leukanic.peter"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" height="20px"></a>
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Github All Releases](https://img.shields.io/github/downloads/Peter-L-SVK/pro_audio_config/total.svg)]() <a href="https://buymeacoffee.com/leukanic.peter"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" height="20px"></a>
 
 A professional audio configuration tool for Linux systems that provides a simple graphical interface to manage PipeWire and ALSA audio settings. Finally, an easy way to configure sample rates, bit depths, and buffer sizes without digging through config files.
 
@@ -277,10 +277,10 @@ For support and questions:
 
 ### Tested on
 - Fedora 42 Cinnamon (fully works)
-- Fedora 43 Jam with Plasma 6.5 (fully works)
+- Fedora 43 Jam with KDE Plasma 6.5 (fully works)
 - Mint MATE 22.2 Zara (fully works)
 - Ubuntu MATE 24.04.03 LTS (fully works)
-- Pop!_OS 24.04 LTS Cosmic desktop (live monitor isn't showing activity due to Cosmic UI differency but config and info showing works)
+- Pop!_OS 24.04 LTS Cosmic desktop (live monitor isn't showing activity due to Cosmic UI differency, but configs and info showing works)
 
 **Note:** Since this works on more conservative Ubuntu LTS based systems, newer non LTS Ubuntu OSes will defintelly work...
 
