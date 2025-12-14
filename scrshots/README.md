@@ -31,6 +31,12 @@ About Feadora jam - [Fedora Jam](https://www.fedoraproject.org/labs/jam)
 ![Running the program in VM Ware](scr12.png)  
 *(Running program in VM Ware on Mint 22.2 Zara MATE default theme)*  
 
+![Running the program in VM Ware](scr13.png)  
+*(Running program in VM Ware on Mnajaro Gnome 40 default theme)*  
+
+![Running the program in VM Ware](scr15.png)  
+*(Running program in VM Ware on EndeavourOS Ganymede KDE Plasma 6.5 default theme)*  
+
 ![About](scr7.png)  
 *(Help -> About)*  
 
