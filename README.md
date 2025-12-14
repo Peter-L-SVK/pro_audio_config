@@ -98,17 +98,24 @@ As audio companies improve their Linux driver support and PipeWire continues to 
 
 1. Install rust and cargo:
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh # select 1
+
+# sh/bash/zsh/dash/ash/pdksh etc
+. "$HOME/.cargo/env" # for fish and nushell see output of rust install
 ```
 
 2. Install dependencies for app building:
 ```bash
-# Fedora/CentOS-Stream/RHEL/Rocky
-sudo dnf install  pipewire-devel clang llvm-dev gtk3-devel
+# Fedora/Centos/RHEL/Rocky
+sudo dnf install  pipewire-devel clang llvm-dev gtk3-devel # pkg-config add in Manjaro
 
-# Ubuntu/Debian/Mint/Pop_OS/ZorinOS
+# Arch/EndeavourOS/Manjaro/arch-based
+sudo pacman -S pipewire clang llvm gtk3
+
+# Ubuntu/Debian/Mint/PopOS
 sudo apt install libpipewire-0.3-dev clang llvm-dev libgtk-3-dev
 ```
+
 ### Quick Install
 ```bash
 git clone https://github.com/Peter-L-SVK/pro_audio_config
@@ -282,6 +289,8 @@ For support and questions:
 - Mint MATE 22.2 Zara (fully works)
 - Ubuntu MATE 24.04.03 LTS (fully works)
 - Pop!_OS 24.04 LTS Cosmic desktop (live monitor isn't showing activity due to Cosmic UI differency, but configs and info showing works)
+- Manjaro with Gnome 40 (fully works)
+- EndeavourOS Ganymede with KDE Plasma 6.5 (fully works)
 
 **Note:** Since this works on more conservative Ubuntu LTS based systems, newer non LTS Ubuntu OSes will defintelly work...
 
