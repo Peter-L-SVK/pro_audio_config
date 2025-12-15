@@ -235,7 +235,6 @@ Each tab maintains independent settings, allowing you to optimize input and outp
 ### Configuration Approaches
 - **Primary**: PipeWire config fragments (highest priority)
 - **Fallback**: WirePlumber JSON configuration
-- **Legacy**: WirePlumber Lua configuration (versions < 0.5)
 - **Emergency**: Direct modification of main pipewire.conf
 
 
@@ -289,7 +288,7 @@ For support and questions:
 - Mint MATE 22.2 Zara (fully works)
 - Ubuntu MATE 24.04.03 LTS (fully works)
 - Pop!_OS 24.04 LTS Cosmic desktop (live monitor isn't showing activity due to Cosmic UI differency, but configs and info showing works)
-- Manjaro with Gnome 40 (fully works)
+- Manjaro with Gnome 49 (fully works)
 - EndeavourOS Ganymede with KDE Plasma 6.5 (fully works)
 
 **Note:** Since this works on more conservative Ubuntu LTS based systems, newer non LTS Ubuntu OSes will defintelly work...

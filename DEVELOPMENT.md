@@ -75,12 +75,12 @@ cargo test --tests
 ```bash
 git clone https://github.com/Peter-L-SVK/pro_audio_config
 cd pro_audio_config
-cargo build
+cargo build # -- feature flag
 ```
 
 ### Release Build
 ```bash
-cargo build --release
+cargo build --release # -- feature flag
 ```
 
 ### Debugging
