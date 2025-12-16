@@ -222,18 +222,218 @@ impl ConfigInspectorTab {
 
     fn open_config_file(path: &str, is_system: bool) {
         if is_system {
-            // For system files, use pkexec
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
             let path_clone = path.to_string();
 
-            println!("Opening system file {} with {}", path, editor);
+            println!("Opening system file: {}", path);
 
-            let _ = Command::new("pkexec").arg(&editor).arg(&path_clone).spawn();
+            // Create a simple script that will ask for sudo and open editor
+            let script = format!(
+                r#"#!/bin/bash
+# GNOME-based terminals
+if [ -n "$GNOME_TERMINAL_SCREEN" ] || [ -n "$GNOME_TERMINAL_SERVICE" ]; then
+    # GNOME Terminal
+    if command -v gnome-terminal &> /dev/null; then
+        gnome-terminal -- bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# KDE Plasma - Konsole
+elif [ -n "$KONSOLE_DBUS_SESSION" ] || [ "$XDG_CURRENT_DESKTOP" = "KDE" ] || [ "$DESKTOP_SESSION" = "plasma" ]; then
+    if command -v konsole &> /dev/null; then
+        konsole -e bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# MATE Desktop
+elif [ "$XDG_CURRENT_DESKTOP" = "MATE" ] || [ "$DESKTOP_SESSION" = "mate" ]; then
+    if command -v mate-terminal &> /dev/null; then
+        mate-terminal -- bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# Cinnamon Desktop
+elif [ "$XDG_CURRENT_DESKTOP" = "X-Cinnamon" ] || [ "$DESKTOP_SESSION" = "cinnamon" ]; then
+    if command -v gnome-terminal &> /dev/null; then
+        # Cinnamon often uses gnome-terminal
+        gnome-terminal -- bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    elif command -v x-terminal-emulator &> /dev/null; then
+        x-terminal-emulator -e bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# LXQt Desktop
+elif [ "$XDG_CURRENT_DESKTOP" = "LXQt" ] || [ "$DESKTOP_SESSION" = "lxqt" ]; then
+    if command -v qterminal &> /dev/null; then
+        qterminal -e bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# LXDE Desktop
+elif [ "$XDG_CURRENT_DESKTOP" = "LXDE" ] || [ "$DESKTOP_SESSION" = "LXDE" ]; then
+    if command -v lxterminal &> /dev/null; then
+        lxterminal -e bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# Xfce Desktop
+elif [ "$XDG_CURRENT_DESKTOP" = "XFCE" ] || [ "$DESKTOP_SESSION" = "xfce" ]; then
+    if command -v xfce4-terminal &> /dev/null; then
+        xfce4-terminal -x bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# COSMIC Desktop (System76)
+elif [ "$XDG_CURRENT_DESKTOP" = "COSMIC" ] || echo "$DESKTOP_SESSION" | grep -qi cosmic; then
+    # COSMIC typically uses GNOME infrastructure
+    if command -v gnome-terminal &> /dev/null; then
+        gnome-terminal -- bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# Budgie Desktop
+elif [ "$XDG_CURRENT_DESKTOP" = "Budgie:GNOME" ] || [ "$DESKTOP_SESSION" = "budgie-desktop" ]; then
+    if command -v gnome-terminal &> /dev/null; then
+        gnome-terminal -- bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# Pantheon (elementary OS)
+elif [ "$XDG_CURRENT_DESKTOP" = "Pantheon" ]; then
+    if command -v io.elementary.terminal &> /dev/null; then
+        io.elementary.terminal -e bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    elif command -v pantheon-terminal &> /dev/null; then
+        pantheon-terminal -e "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# Deepin Desktop
+elif [ "$XDG_CURRENT_DESKTOP" = "Deepin" ]; then
+    if command -v deepin-terminal &> /dev/null; then
+        deepin-terminal -e "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+
+# Enlightenment
+elif [ "$XDG_CURRENT_DESKTOP" = "Enlightenment" ] || [ "$DESKTOP_SESSION" = "enlightenment" ]; then
+    if command -v terminology &> /dev/null; then
+        terminology -e "sudoedit {}; echo 'Press Enter to close...'; read"
+        exit 0
+    fi
+fi
+
+# Generic terminal detection as fallback
+# Check for common terminals regardless of DE
+for terminal_cmd in \
+    "$TERMINAL" \
+    "x-terminal-emulator" \
+    "urxvt" \
+    "rxvt" \
+    "st" \
+    "alacritty" \
+    "kitty" \
+    "terminator" \
+    "tilix" \
+    "termite" \
+    "sakura" \
+    "terminology" \
+    "roxterm" \
+    "cool-retro-term" \
+    "hyper" \
+    "wezterm" \
+    "foot" \
+    "xterm"
+do
+    if command -v "$terminal_cmd" &> /dev/null; then
+        case "$terminal_cmd" in
+            "xterm"|"urxvt"|"rxvt"|"st")
+                $terminal_cmd -e "sudoedit {}; echo 'Press Enter to close...'; read"
+                ;;
+            "alacritty"|"kitty"|"wezterm"|"foot")
+                $terminal_cmd -e bash -c "sudoedit {}; echo 'Press Enter to close...'; read"
+                ;;
+            "terminator"|"tilix")
+                $terminal_cmd -e "bash -c 'sudoedit {}; echo \"Press Enter to close...\"; read'"
+                ;;
+            *)
+                $terminal_cmd -e "sudoedit {}; echo 'Press Enter to close...'; read"
+                ;;
+        esac
+        exit 0
+    fi
+done"#,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path,
+                path
+            );
+
+            let temp_script = format!("/tmp/proaudio_edit_{}.sh", std::process::id());
+
+            if let Ok(_) = std::fs::write(&temp_script, &script) {
+                let _ = Command::new("chmod").args(["+x", &temp_script]).status();
+
+                // Try to execute the script
+                match Command::new("sh").arg(&temp_script).spawn() {
+                    Ok(_) => println!("Opened terminal for editing"),
+                    Err(e) => {
+                        println!("Failed to open terminal: {}", e);
+                        Self::show_manual_instructions(path);
+                    }
+                }
+
+                // Clean up after a delay
+                let temp_script_clone = temp_script.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let _ = std::fs::remove_file(&temp_script_clone);
+                });
+            } else {
+                Self::show_manual_instructions(path);
+            }
         } else {
-            // For user files
+            // User files
             let path_clone = path.to_string();
             let _ = Command::new("xdg-open").arg(&path_clone).spawn();
         }
+    }
+
+    fn show_manual_instructions(path: &str) {
+        println!("\n═══════════════════════════════════════════════════════════");
+        println!("  SYSTEM FILE EDITING INSTRUCTIONS");
+        println!("═══════════════════════════════════════════════════════════");
+        println!("File: {}", path);
+        println!();
+        println!("To edit this system configuration file:");
+        println!();
+        println!("OPTION 1 - Recommended:");
+        println!("  Open a terminal and run:");
+        println!("    sudoedit {}", path);
+        println!();
+        println!("OPTION 2 - Alternative:");
+        println!("  Open a terminal and run:");
+        println!("    sudo nano {}", path);
+        println!();
+        println!("OPTION 3 - Graphical editor (if available):");
+        println!("  Open a terminal and run:");
+        println!("    sudo gedit {}", path);
+        println!("    (replace 'gedit' with your preferred editor)");
+        println!("═══════════════════════════════════════════════════════════\n");
     }
 
     pub fn scan_configs(&self) {
