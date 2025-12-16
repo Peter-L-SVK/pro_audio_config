@@ -11,6 +11,7 @@
 pub mod audio;
 pub mod audio_capture;
 pub mod config;
+pub mod config_inspector;
 pub mod monitoring;
 pub mod ui;
 pub mod utils;

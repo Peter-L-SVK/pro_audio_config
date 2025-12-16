@@ -31,7 +31,7 @@ use crate::config::{
     apply_advanced_audio_settings, apply_input_audio_settings_with_auth_blocking,
     apply_output_audio_settings_with_auth_blocking, apply_user_audio_settings,
 };
-
+use crate::config_inspector::ConfigInspectorTab;
 use crate::monitoring::MonitoringTab;
 
 #[derive(Clone)]
@@ -42,6 +42,7 @@ pub struct AudioApp {
     pub input_tab: AudioTab,
     pub advanced_tab: AdvancedTab,
     pub monitoring_tab: MonitoringTab,
+    pub config_inspector_tab: ConfigInspectorTab,
 }
 
 #[derive(Clone)]
@@ -278,6 +279,14 @@ impl AudioApp {
         let monitoring_label = Label::new(Some("Monitor"));
         notebook.append_page(&monitoring_tab.container, Some(&monitoring_label));
 
+        // Create config-inspector tab
+        let config_inspector_tab = ConfigInspectorTab::new();
+        let config_inspector_label = Label::new(Some("Config Inspector"));
+        notebook.append_page(
+            &config_inspector_tab.container,
+            Some(&config_inspector_label),
+        );
+
         main_box.pack_start(&notebook, true, true, 0);
         scrolled_window.add(&main_box);
         window.add(&scrolled_window);
@@ -289,6 +298,7 @@ impl AudioApp {
             input_tab,
             advanced_tab,
             monitoring_tab,
+            config_inspector_tab,
         };
 
         // ===== CONNECT SIGNALS =====
@@ -359,11 +369,19 @@ impl AudioApp {
         self.output_tab.detect_current_device();
         self.input_tab.detect_current_device();
         self.advanced_tab.detect_advanced_devices();
+        self.config_inspector_tab.scan_configs();
     }
 
     fn setup_signals(&self) {
         self.output_tab.setup_signals(self.clone());
         self.input_tab.setup_signals(self.clone());
+
+        let config_inspector_tab = self.config_inspector_tab.clone();
+        self.config_inspector_tab
+            .refresh_button
+            .connect_clicked(move |_| {
+                config_inspector_tab.scan_configs();
+            });
     }
 
     fn setup_advanced_signals(&self) {

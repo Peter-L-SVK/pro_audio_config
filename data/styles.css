@@ -40,6 +40,32 @@ progressbar.clipping progress {
     background-color: #C01C28; /* Red */
 }
 
+/* Config tree view styling */
+treeview {
+    font-family: Monospace, monospace;
+    font-size: 10pt;
+}
+
+treeview header button {
+    font-weight: bold;
+}
+
+/* Success/error message styling */
+.success-message {
+    color: #26a269;
+    font-weight: bold;
+}
+
+.error-message {
+    color: #c01c28;
+    font-weight: bold;
+}
+
+.info-message {
+    color: #1c71d8;
+    font-weight: bold;
+}
+
 /* Style for the small indicators in the key */
 .level-indicator {
     min-width: 16px;
