@@ -13,7 +13,7 @@ use crate::audio::{
 };
 use glib::ControlFlow;
 use gtk::prelude::*;
-use gtk::{Box as GtkBox, Frame, Label, Orientation, ProgressBar, Separator};
+use gtk::{Box as GtkBox, Button, Frame, Label, Orientation, ProgressBar, Separator};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -57,6 +57,7 @@ pub struct MonitoringTab {
     left_channel_meter: ProgressBar,
     right_channel_meter: ProgressBar,
     system_info_label: Label,
+    reconnect_button: Button,
     update_thread_running: Arc<Mutex<bool>>,
     sender: mpsc::Sender<MonitorMessage>,
 }
@@ -201,11 +202,27 @@ impl MonitoringTab {
         meter_box.pack_start(&Separator::new(Orientation::Horizontal), false, false, 12);
         meter_box.pack_start(&level_key_box, false, false, 0);
 
+        // ===== RECONNECT BUTTON SECTION =====
+        let (button_frame, button_box) = create_section_box("Manual Connection");
+
+        let reconnect_button = Button::with_label("Re-connect Monitor");
+        reconnect_button.set_tooltip_text(Some("Manually reconnect audio monitoring to PipeWire"));
+
+        let button_info_label = Label::new(Some(
+            "If monitoring stops working, use this button to manually reconnect to PipeWire audio output.",
+        ));
+        button_info_label.set_line_wrap(true);
+        button_info_label.set_halign(gtk::Align::Start);
+
+        button_box.pack_start(&reconnect_button, false, false, 0);
+        button_box.pack_start(&button_info_label, false, false, 0);
+
         // ===== ASSEMBLE TAB =====
         container.pack_start(&status_frame, false, false, 0);
         container.pack_start(&config_frame, false, false, 0);
         container.pack_start(&device_frame, false, false, 0);
         container.pack_start(&meter_frame, false, false, 0);
+        container.pack_start(&button_frame, false, false, 0);
 
         // Create channel for thread communication
         let (sender, receiver) = mpsc::channel();
@@ -221,9 +238,16 @@ impl MonitoringTab {
             left_channel_meter,
             right_channel_meter,
             system_info_label,
+            reconnect_button,
             update_thread_running: Arc::new(Mutex::new(false)),
             sender,
         };
+
+        // Set up button click handler
+        let tab_for_button = tab.clone();
+        tab.reconnect_button.connect_clicked(move |_| {
+            tab_for_button.manual_reconnect();
+        });
 
         // Set up receiver in the main thread
         let tab_clone = tab.clone();
@@ -303,7 +327,29 @@ impl MonitoringTab {
     fn handle_message(&self, message: MonitorMessage) {
         match message {
             MonitorMessage::Status(text) => {
-                self.status_label.set_text(&text);
+                if text.starts_with("BUTTON_RESET") {
+                    self.reconnect_button.set_sensitive(true);
+                    self.reconnect_button.set_label("Re-connect Monitor");
+
+                    // If it's an error, also show dialog
+                    if text.starts_with("BUTTON_RESET_ERROR:") {
+                        let error_msg = text.trim_start_matches("BUTTON_RESET_ERROR:");
+                        let dialog = gtk::MessageDialog::new(
+                            None::<&gtk::Window>,
+                            gtk::DialogFlags::MODAL,
+                            gtk::MessageType::Error,
+                            gtk::ButtonsType::Close,
+                            &format!("Failed to reconnect to PipeWire:\n\n{}", error_msg),
+                        );
+                        dialog.run();
+                        // SAFETY: Destroying a dialog after it has been run is safe
+                        unsafe {
+                            dialog.destroy();
+                        }
+                    }
+                } else {
+                    self.status_label.set_text(&text);
+                }
             }
             MonitorMessage::Config {
                 sample_rate,
@@ -350,11 +396,12 @@ impl MonitoringTab {
                 self.left_channel_meter.set_text(Some(&left_db));
 
                 // Apply CSS classes based on level - CORRECTED THRESHOLDS
+                // NOTE: CSS has .level-safe, .level-warning, .level-danger classes
                 let left_context = self.left_channel_meter.style_context();
                 left_context.remove_class("level-safe");
                 left_context.remove_class("level-warning");
                 left_context.remove_class("level-danger");
-                left_context.remove_class("clipping");
+                left_context.remove_class("clipping"); // This class is in CSS with animation
 
                 // Correct thresholds that match your labels
                 if left_level < 0.95 {
@@ -366,7 +413,7 @@ impl MonitoringTab {
                 } else {
                     // Danger: ≥ -0.6 dB (approaching clipping)
                     left_context.add_class("level-danger");
-                    left_context.add_class("clipping");
+                    left_context.add_class("clipping"); // Add blinking effect for clipping
                 }
 
                 // Update right channel meter (same logic)
@@ -393,8 +440,50 @@ impl MonitoringTab {
                 // Update status to show error
                 self.status_label.set_text(&format!("Error: {}", err));
                 eprintln!("Monitoring error: {}", err);
+
+                // Also re-enable the button if it was disabled
+                self.reconnect_button.set_sensitive(true);
+                self.reconnect_button.set_label("Re-connect Monitor");
             }
         }
+    }
+
+    pub fn manual_reconnect(&self) {
+        // Update UI directly (we're in main thread)
+        self.status_label
+            .set_text("Attempting manual reconnection...");
+        self.reconnect_button.set_sensitive(false);
+        self.reconnect_button.set_label("Connecting...");
+
+        // Clone sender
+        let sender = self.sender.clone();
+
+        // Get the button's widget ID or use a flag approach
+        thread::spawn(move || {
+            crate::audio::clear_cache();
+
+            match crate::audio_capture::auto_connect_monitor_delayed() {
+                Ok(_) => {
+                    let _ = sender.send(MonitorMessage::Status(
+                        "✓ Manual reconnection successful".to_string(),
+                    ));
+
+                    // Send a special message to reset button
+                    let _ = sender.send(MonitorMessage::Status("BUTTON_RESET".to_string()));
+                }
+                Err(e) => {
+                    let _ = sender.send(MonitorMessage::Error(format!(
+                        "Manual reconnection failed: {}",
+                        e
+                    )));
+
+                    // Send special message for error reset
+                    let _ = sender.send(MonitorMessage::Status(
+                        "BUTTON_RESET_ERROR:".to_string() + &e,
+                    ));
+                }
+            }
+        });
     }
 
     pub fn start_monitoring(&self) {

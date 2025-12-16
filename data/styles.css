@@ -1,3 +1,6 @@
+/* data/styles.css - Pro Audio Config - Minimal Styles */
+
+/* ===== AUDIO METER STYLES ONLY ===== */
 .level-safe progressbar trough,
 .level-safe progressbar progress {
     background-color: #26A269; /* Green */
@@ -24,7 +27,7 @@ progressbar.clipping progress {
     100% { opacity: 1; }
 }
 
-/* NEW: Audio meter indicator styles */
+/* Audio meter indicator styles */
 .level-safe {
     background-color: #26A269; /* Green */
 }
