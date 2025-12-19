@@ -62,6 +62,128 @@ pub struct MonitoringTab {
     sender: mpsc::Sender<MonitorMessage>,
 }
 
+fn manual_pw_link_connection() -> Result<(), String> {
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    println!("MANUAL: Listing all monitor ports...");
+
+    // First, list all monitor ports
+    let output = Command::new("pw-link")
+        .args(["--output"])
+        .output()
+        .map_err(|e| format!("pw-link failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err("pw-link command failed".to_string());
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let mut monitor_ports = Vec::new();
+
+    for line in output_str.lines() {
+        if line.contains("monitor_") && !line.contains("pro_audio_config") {
+            monitor_ports.push(line.trim().to_string());
+            println!("MANUAL: Found monitor port: {}", line.trim());
+        }
+    }
+
+    if monitor_ports.is_empty() {
+        return Err("No monitor ports found. Is audio playing?".to_string());
+    }
+
+    // Get your app's input ports
+    let input_output = Command::new("pw-link")
+        .args(["--input"])
+        .output()
+        .map_err(|e| format!("pw-link --input failed: {}", e))?;
+
+    let input_str = String::from_utf8_lossy(&input_output.stdout);
+    let mut input_ports = Vec::new();
+
+    for line in input_str.lines() {
+        if line.contains("pro_audio_config:input_") {
+            input_ports.push(line.trim().to_string());
+            println!("MANUAL: Found input port: {}", line.trim());
+        }
+    }
+
+    if input_ports.is_empty() {
+        return Err("No pro_audio_config input ports found. Is the app running?".to_string());
+    }
+
+    // Try to connect matching channels
+    let mut connected = 0;
+    let mut errors = Vec::new();
+
+    for monitor_port in &monitor_ports {
+        // Extract channel name
+        if let Some(colon_pos) = monitor_port.rfind(':') {
+            let channel_name = &monitor_port[colon_pos + 1..]; // e.g., "monitor_FL"
+            let simple_channel = channel_name.replace("monitor_", "");
+
+            // Find matching input port
+            let target_port = format!("pro_audio_config:input_{}", simple_channel);
+
+            if input_ports.iter().any(|p| p == &target_port) {
+                println!("MANUAL: Connecting {} -> {}", monitor_port, target_port);
+
+                for attempt in 1..=3 {
+                    match Command::new("pw-link")
+                        .args([monitor_port, &target_port])
+                        .status()
+                    {
+                        Ok(status) if status.success() => {
+                            println!("MANUAL: ✓ Connected {} channel", simple_channel);
+                            connected += 1;
+                            thread::sleep(Duration::from_millis(100));
+                            break;
+                        }
+                        Ok(_) if attempt < 3 => {
+                            println!("MANUAL: Retry {}...", attempt);
+                            thread::sleep(Duration::from_millis(300));
+                        }
+                        Err(e) if attempt < 3 => {
+                            println!("MANUAL: Error: {}, retrying...", e);
+                            thread::sleep(Duration::from_millis(300));
+                        }
+                        _ => {
+                            errors.push(format!("Failed to connect {}", simple_channel));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if connected > 0 {
+        println!("MANUAL: Successfully connected {} channels", connected);
+
+        // Verify connections
+        thread::sleep(Duration::from_millis(500));
+
+        if let Ok(verify) = Command::new("pw-link").args(["--links"]).output() {
+            let verify_str = String::from_utf8_lossy(&verify.stdout);
+            let links = verify_str
+                .lines()
+                .filter(|line| line.contains("pro_audio_config"))
+                .count();
+            println!("MANUAL: Verified {} active connections", links);
+        }
+
+        Ok(())
+    } else {
+        let all_errors = if errors.is_empty() {
+            "No matching channels found".to_string()
+        } else {
+            errors.join(", ")
+        };
+
+        Err(format!("Failed to connect any channels: {}", all_errors))
+    }
+}
+
 impl MonitoringTab {
     pub fn new() -> Self {
         // Load CSS styles first
@@ -460,28 +582,60 @@ impl MonitoringTab {
 
         // Get the button's widget ID or use a flag approach
         thread::spawn(move || {
+            // First, stop any existing monitoring
+            println!("INFO: Stopping existing monitoring...");
+
+            // Clear cache
             crate::audio::clear_cache();
 
+            // Wait a moment
+            thread::sleep(Duration::from_millis(500));
+
+            // Try multiple connection methods
+            let mut success = false;
+            let mut error_message = String::new();
+
+            // Method 1: Try the direct auto-connect
+            println!("INFO: Attempting direct connection...");
             match crate::audio_capture::auto_connect_monitor_delayed() {
                 Ok(_) => {
-                    let _ = sender.send(MonitorMessage::Status(
-                        "✓ Manual reconnection successful".to_string(),
-                    ));
-
-                    // Send a special message to reset button
-                    let _ = sender.send(MonitorMessage::Status("BUTTON_RESET".to_string()));
+                    success = true;
+                    println!("INFO: Direct connection successful");
                 }
                 Err(e) => {
-                    let _ = sender.send(MonitorMessage::Error(format!(
-                        "Manual reconnection failed: {}",
-                        e
-                    )));
-
-                    // Send special message for error reset
-                    let _ = sender.send(MonitorMessage::Status(
-                        "BUTTON_RESET_ERROR:".to_string() + &e,
-                    ));
+                    error_message = format!("Direct connection failed: {}", e);
+                    println!("WARN: {}", error_message);
                 }
+            }
+
+            // Method 2: If direct connection fails, try manual pw-link commands
+            if !success {
+                println!("INFO: Trying manual pw-link connection...");
+                match manual_pw_link_connection() {
+                    Ok(_) => {
+                        success = true;
+                        println!("INFO: Manual pw-link connection successful");
+                    }
+                    Err(e) => {
+                        error_message = format!("Manual connection also failed: {}", e);
+                        println!("WARN: {}", error_message);
+                    }
+                }
+            }
+
+            if success {
+                let _ = sender.send(MonitorMessage::Status(
+                    "✓ Manual reconnection successful".to_string(),
+                ));
+                let _ = sender.send(MonitorMessage::Status("BUTTON_RESET".to_string()));
+            } else {
+                let _ = sender.send(MonitorMessage::Error(format!(
+                    "Manual reconnection failed: {}",
+                    error_message
+                )));
+                let _ = sender.send(MonitorMessage::Status(
+                    "BUTTON_RESET_ERROR:".to_string() + &error_message,
+                ));
             }
         });
     }

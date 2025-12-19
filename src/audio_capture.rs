@@ -19,140 +19,180 @@ use std::time::{Duration, Instant};
 use crate::audio::{clear_cache, detect_output_audio_device, extract_actual_device_name};
 
 // ====== AUTO-CONNECT FUNCTION (PUBLIC, MODULE LEVEL) ======
+
 pub fn auto_connect_monitor_delayed() -> Result<(), String> {
     use std::process::Command;
     use std::thread;
     use std::time::Duration;
 
-    println!("DEBUG: Delayed auto-connect (waiting for full initialization)...");
+    println!("DEBUG: Starting automatic audio connection...");
+    thread::sleep(Duration::from_millis(1500));
 
-    // Wait for everything to be fully initialized
-    thread::sleep(Duration::from_millis(2000));
-
-    // Clear cache to get fresh detection
-    clear_cache();
-
-    // 1. Use your EXISTING working detection
-    let device_info = detect_output_audio_device()?;
-    println!("DEBUG: Detected after delay: {}", device_info);
-
-    // 2. Extract the device name
-    let device_name = extract_actual_device_name(&device_info)
-        .ok_or_else(|| format!("Could not extract device name from: {}", device_info))?;
-
-    println!("DEBUG: Connecting to: {}", device_name);
-
-    // 3. Get the EXACT ProAudioMonitor port from pw-dump
-    println!("DEBUG: Getting ProAudioMonitor port details...");
-
-    let monitor_port = if let Ok(output) = Command::new("pw-dump").output() {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        // Look for "object.path": "ProAudioMonitor:input_0"
-        if let Some(start) = output_str.find("\"object.path\": \"ProAudioMonitor:") {
-            let after_start = &output_str[start + 16..]; // Skip "\"object.path\": \""
-            if let Some(end) = after_start.find('"') {
-                let port = &after_start[..end];
-                println!("DEBUG: Found monitor port: {}", port);
-                Some(port.to_string())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let monitor_port =
-        monitor_port.ok_or_else(|| "Could not find ProAudioMonitor port".to_string())?;
-
-    // 4. Get the EXACT output port from pw-link --output
-    println!("DEBUG: Getting exact output port for {}...", device_name);
-
-    let output_ports_output = Command::new("pw-link")
+    // 1. Get all monitor ports
+    let output = Command::new("pw-link")
         .args(["--output"])
         .output()
-        .map_err(|e| format!("Failed to check ports: {}", e))?;
+        .map_err(|e| format!("Failed to run pw-link: {}", e))?;
 
-    let mut target_port = None;
+    if !output.status.success() {
+        return Err("pw-link command failed".to_string());
+    }
 
-    if output_ports_output.status.success() {
-        let ports_str = String::from_utf8_lossy(&output_ports_output.stdout);
-        println!("DEBUG: Available output ports for {}:", device_name);
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let mut monitor_ports = Vec::new();
 
-        for line in ports_str.lines() {
-            if line.contains(&device_name) && line.contains("monitor_FL") {
-                println!("  ✓ Found: {}", line);
-                target_port = Some(line.to_string());
-                break;
-            }
+    // 2. Parse all monitor ports, excluding our own app
+    for line in output_str.lines() {
+        if line.contains("monitor_") && !line.contains("pro_audio_config") {
+            monitor_ports.push(line.trim().to_string());
         }
     }
 
-    let target_port =
-        target_port.ok_or_else(|| format!("Could not find monitor_FL port for {}", device_name))?;
+    if monitor_ports.is_empty() {
+        return Err(
+            "No monitor ports found. Make sure audio is playing or an output device is active."
+                .to_string(),
+        );
+    }
 
-    // 5. Connect using the EXACT port-to-port connection
-    println!("DEBUG: Connecting {} to {}", target_port, monitor_port);
+    println!("DEBUG: Found {} monitor ports:", monitor_ports.len());
+    for port in &monitor_ports {
+        println!("  - {}", port);
+    }
 
-    let cmd = format!("{} {}", target_port, monitor_port);
-    println!("DEBUG: Executing: {}", cmd);
+    // 3. Group ports by their output device
+    let mut devices: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
-    // Try multiple times
-    for attempt in 1..=5 {
-        println!("DEBUG: Connection attempt {}...", attempt);
+    for port in monitor_ports {
+        // Extract device name (everything before the last colon)
+        if let Some(colon_pos) = port.rfind(':') {
+            let device = port[..colon_pos].to_string();
+            let channel_port = port.to_string();
+            devices
+                .entry(device)
+                .or_insert_with(Vec::new)
+                .push(channel_port);
+        }
+    }
 
-        match Command::new("pw-link")
-            .args(cmd.split_whitespace())
-            .status()
+    // 4. Choose the best device (prefer active playback, fallback to first)
+    let chosen_device = if devices.len() == 1 {
+        // Only one device
+        devices.keys().next().unwrap().clone()
+    } else {
+        // Multiple devices - try to detect which one is active
+        // Check with pactl for active sink
+        let active_device = if let Ok(pactl_output) = Command::new("pactl").args(["info"]).output()
         {
-            Ok(status) if status.success() => {
-                println!("DEBUG: ✓ Connection successful!");
+            let pactl_str = String::from_utf8_lossy(&pactl_output.stdout);
+            pactl_str
+                .lines()
+                .find(|line| line.contains("Default Sink:"))
+                .map(|line| line.replace("Default Sink:", "").trim().to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
-                // Verify connection
-                thread::sleep(Duration::from_millis(500));
+        if !active_device.is_empty() {
+            println!("DEBUG: Active audio sink: {}", active_device);
+            // Find matching device
+            devices
+                .keys()
+                .find(|device| device.contains(&active_device))
+                .map(|d| d.clone())
+                .unwrap_or_else(|| devices.keys().next().unwrap().clone())
+        } else {
+            // Fallback: choose device with most channels
+            devices
+                .iter()
+                .max_by_key(|(_, ports)| ports.len())
+                .map(|(device, _)| device.clone())
+                .unwrap()
+        }
+    };
 
-                // Check with pw-cli inspect
-                if let Ok(output) = Command::new("pw-cli")
-                    .args(["inspect", "ProAudioMonitor"])
-                    .output()
-                {
-                    if output.status.success() {
-                        let output_str = String::from_utf8_lossy(&output.stdout);
-                        if output_str.contains("links") && !output_str.contains("links = 0") {
-                            println!("DEBUG: ✓ Connection verified in PipeWire!");
-                        }
-                    }
+    let device_ports = &devices[&chosen_device];
+    println!(
+        "DEBUG: Selected device: {} ({} channels)",
+        chosen_device,
+        device_ports.len()
+    );
+
+    // 5. Connect each channel
+    let mut successful_connections = 0;
+
+    for monitor_port in device_ports {
+        // Extract channel name (e.g., "FL" from "monitor_FL")
+        let channel = if let Some(underscore_pos) = monitor_port.rfind('_') {
+            &monitor_port[underscore_pos + 1..]
+        } else {
+            continue;
+        };
+
+        // Build target port name
+        let target_port = format!("pro_audio_config:input_{}", channel);
+
+        println!("DEBUG: Connecting {} -> {}", monitor_port, target_port);
+
+        // Try to connect
+        for attempt in 1..=3 {
+            match Command::new("pw-link")
+                .args([monitor_port, &target_port])
+                .status()
+            {
+                Ok(status) if status.success() => {
+                    println!("DEBUG: ✓ Connected {} channel", channel);
+                    successful_connections += 1;
+                    break;
                 }
-
-                // Check with pw-top style monitoring
-                println!("DEBUG: Connection should be active. Check audio levels in your app!");
-                return Ok(());
-            }
-            Ok(_) => {
-                println!("DEBUG: Connection failed, retrying...");
-            }
-            Err(e) => {
-                println!("DEBUG: Error: {}", e);
+                Ok(_) if attempt < 3 => {
+                    println!(
+                        "DEBUG: Retrying {} channel (attempt {})...",
+                        channel, attempt
+                    );
+                    thread::sleep(Duration::from_millis(300));
+                }
+                Err(e) if attempt < 3 => {
+                    println!("DEBUG: Error connecting {}: {}, retrying...", channel, e);
+                    thread::sleep(Duration::from_millis(300));
+                }
+                _ => {
+                    println!("DEBUG: ✗ Failed to connect {} channel", channel);
+                }
             }
         }
-
-        thread::sleep(Duration::from_millis(1000));
     }
 
-    // 6. Provide EXACT manual command
-    println!("DEBUG: === MANUAL CONNECTION COMMAND ===");
-    println!("DEBUG: Run this exact command in terminal:");
-    println!("DEBUG:   pw-link {} {}", target_port, monitor_port);
-    println!("DEBUG:");
-    println!("DEBUG: Or if that doesn't work, try:");
-    println!("DEBUG:   pw-link {} ProAudioMonitor:input_0", target_port);
+    // 6. Verify and report
+    thread::sleep(Duration::from_millis(500));
 
-    Err(format!(
-        "Failed to connect {} to {}",
-        target_port, monitor_port
-    ))
+    // Check connections
+    if let Ok(links_output) = Command::new("pw-link").args(["--links"]).output() {
+        let links_str = String::from_utf8_lossy(&links_output.stdout);
+        let our_links = links_str
+            .lines()
+            .filter(|line| line.contains("pro_audio_config"))
+            .count();
+
+        println!(
+            "DEBUG: Active connections to pro_audio_config: {}",
+            our_links
+        );
+    }
+
+    if successful_connections > 0 {
+        println!(
+            "DEBUG: ✓ Successfully connected {}/{} channels",
+            successful_connections,
+            device_ports.len()
+        );
+        println!("DEBUG: Play audio to see levels in your app!");
+        Ok(())
+    } else {
+        Err("Failed to connect any audio channels".to_string())
+    }
 }
 
 // ====== AUDIO LEVELS STRUCT ======
@@ -291,111 +331,108 @@ impl PipeWireMonitor {
         use libspa::utils::Direction;
         use pipewire as pw;
         use std::ffi::CString;
+        use std::time::Duration;
 
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        unsafe {
+            pw::init();
+        }
 
-        // Initialize PipeWire
-        pw::init();
-
-        // 1. Create main loop
-        let mainloop = pw::main_loop::MainLoop::new(None)
+        // 1. Create main loop, context, and core
+        let mainloop = pw::main_loop::MainLoopRc::new(None)
             .map_err(|e| format!("Failed to create MainLoop: {}", e))?;
 
-        let context = pw::context::Context::new(&mainloop)
+        let context = pw::context::ContextRc::new(&mainloop, None)
             .map_err(|e| format!("Failed to create Context: {}", e))?;
 
         let core = context
-            .connect(None)
+            .connect_rc(None)
             .map_err(|e| format!("Failed to connect Core: {}", e))?;
 
-        // 2. Create properties - specifically for monitoring
-        let mut props = pw::properties::Properties::new();
+        // 2. Create stream properties
+        let props = pw::properties::properties! {
+            *pw::keys::MEDIA_TYPE => "Audio",
+            *pw::keys::MEDIA_CATEGORY => "Capture",
+            *pw::keys::MEDIA_ROLE => "Music",
+            *pw::keys::STREAM_CAPTURE_SINK => "true", // Enable monitor ports
+        };
 
-        props.insert(
-            CString::new("media.type").unwrap().into_bytes(),
-            CString::new("Audio").unwrap().into_bytes(),
-        );
-        props.insert(
-            CString::new("media.category").unwrap().into_bytes(),
-            CString::new("Capture").unwrap().into_bytes(),
-        );
-        props.insert(
-            CString::new("node.name").unwrap().into_bytes(),
-            CString::new("ProAudioMonitor").unwrap().into_bytes(),
-        );
-        props.insert(
-            CString::new("audio.channels").unwrap().into_bytes(),
-            CString::new("2").unwrap().into_bytes(),
-        );
-        props.insert(
-            CString::new("node.description").unwrap().into_bytes(),
-            CString::new("Audio Monitor for Pro Audio Config")
-                .unwrap()
-                .into_bytes(),
-        );
-        // Add monitor properties for better auto-connect
-        props.insert(
-            CString::new("stream.capture.sink").unwrap().into_bytes(),
-            CString::new("true").unwrap().into_bytes(),
-        );
-
-        // 3. Create stream
-        let stream = pw::stream::Stream::new(&core, "audio-monitor", props)
+        // 3. Create the stream
+        let stream = pw::stream::StreamBox::new(&core, "ProAudioMonitor", props)
             .map_err(|e| format!("Failed to create Stream: {}", e))?;
 
         println!("DEBUG: Stream created successfully");
 
-        // 4. Create state
-        #[derive(Default)]
+        // 4. Start auto-connect in a separate thread
+        let running_clone = Arc::clone(&running);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(1000));
+
+            if !running_clone.load(Ordering::SeqCst) {
+                return;
+            }
+
+            println!("DEBUG: Auto-connecting to audio outputs...");
+            // Call your existing auto_connect_monitor_delayed function
+            if let Err(e) = auto_connect_monitor_delayed() {
+                println!("WARN: Auto-connect failed: {}", e);
+                println!("INFO: Manual connection may be needed");
+            }
+        });
+
+        // 5. State for audio data
         struct AudioState {
             left_peak: f32,
             right_peak: f32,
             last_update: Option<std::time::Instant>,
         }
 
+        // 6. Setup the stream listener
         let sender_clone = sender.clone();
-
         let _listener = stream
-            .add_local_listener::<AudioState>()
-            .process(
-                move |stream_ref: &pw::stream::StreamRef, state: &mut AudioState| {
-                    // Initialize last_update if needed
-                    if state.last_update.is_none() {
-                        state.last_update = Some(std::time::Instant::now());
+            .add_local_listener_with_user_data(AudioState {
+                left_peak: 0.0,
+                right_peak: 0.0,
+                last_update: None,
+            })
+            .process(move |stream, user_data| {
+                // Initialize last_update if needed
+                if user_data.last_update.is_none() {
+                    user_data.last_update = Some(std::time::Instant::now());
+                }
+
+                match stream.dequeue_buffer() {
+                    None => {
+                        // No buffer available
                     }
+                    Some(mut buffer) => {
+                        let datas = buffer.datas_mut();
+                        if datas.is_empty() {
+                            return;
+                        }
 
-                    if let Some(mut buffer) = stream_ref.dequeue_buffer() {
-                        let mut has_audio = false;
+                        // Process audio data
+                        let data = &mut datas[0];
+                        let chunk_size = data.chunk().size() as usize;
 
-                        for data in buffer.datas_mut() {
-                            let chunk_ref = data.chunk();
-                            let data_size_bytes = chunk_ref.size() as usize;
+                        if let Some(samples) = data.data() {
+                            let f32_slice: &[f32] = bytemuck::cast_slice(&samples[..chunk_size]);
 
-                            if let Some(data_slice) = data.data() {
-                                if data_size_bytes > 0 {
-                                    has_audio = true;
-
-                                    let samples: &[f32] =
-                                        bytemuck::cast_slice(&data_slice[..data_size_bytes]);
-
-                                    for i in (0..samples.len()).step_by(2) {
-                                        if i < samples.len() {
-                                            state.left_peak = state.left_peak.max(samples[i].abs());
-                                        }
-                                        if i + 1 < samples.len() {
-                                            state.right_peak =
-                                                state.right_peak.max(samples[i + 1].abs());
-                                        }
-                                    }
+                            // Find peak values (assuming stereo interleaved format)
+                            for chunk in f32_slice.chunks(2) {
+                                if let Some(&left) = chunk.get(0) {
+                                    user_data.left_peak = user_data.left_peak.max(left.abs());
+                                }
+                                if let Some(&right) = chunk.get(1) {
+                                    user_data.right_peak = user_data.right_peak.max(right.abs());
                                 }
                             }
                         }
 
-                        // Send updates periodically
-                        if let Some(last) = state.last_update {
+                        // Send updates periodically (every 100ms)
+                        if let Some(last) = user_data.last_update {
                             if last.elapsed() >= Duration::from_millis(100) {
-                                let left_db = 20.0 * (state.left_peak.max(0.0001).log10());
-                                let right_db = 20.0 * (state.right_peak.max(0.0001).log10());
+                                let left_db = 20.0 * (user_data.left_peak.max(0.0001).log10());
+                                let right_db = 20.0 * (user_data.right_peak.max(0.0001).log10());
 
                                 let left_level = ((left_db + 60.0) / 60.0).clamp(0.0, 1.0) as f64;
                                 let right_level = ((right_db + 60.0) / 60.0).clamp(0.0, 1.0) as f64;
@@ -407,49 +444,55 @@ impl PipeWireMonitor {
                                     right_db: format!("{:.1} dB", right_db),
                                 });
 
-                                state.left_peak = 0.0;
-                                state.right_peak = 0.0;
-                                state.last_update = Some(std::time::Instant::now());
+                                user_data.left_peak = 0.0;
+                                user_data.right_peak = 0.0;
+                                user_data.last_update = Some(std::time::Instant::now());
                             }
                         }
-                    } else {
-                        // No buffer available
-                        static NO_BUFFER_COUNT: AtomicUsize = AtomicUsize::new(0);
-                        let count = NO_BUFFER_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-                        if count == 1 || count % 50 == 0 {
-                            println!(
-                                "DEBUG: No audio buffer (count: {}) - monitor may not be connected",
-                                count
-                            );
-                        }
                     }
-                },
+                }
+            })
+            .register()
+            .map_err(|e| format!("Failed to register listener: {}", e))?;
+
+        // 7. Set audio format
+        let mut audio_info = libspa::param::audio::AudioInfoRaw::new();
+        audio_info.set_format(libspa::param::audio::AudioFormat::F32LE);
+        let obj = pw::spa::pod::Object {
+            type_: pw::spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
+            id: pw::spa::param::ParamType::EnumFormat.as_raw(),
+            properties: audio_info.into(),
+        };
+        let values: Vec<u8> = pw::spa::pod::serialize::PodSerializer::serialize(
+            std::io::Cursor::new(Vec::new()),
+            &pw::spa::pod::Value::Object(obj),
+        )
+        .unwrap()
+        .0
+        .into_inner();
+        let mut params = [Pod::from_bytes(&values).unwrap()];
+
+        // 8. Connect the stream
+        stream
+            .connect(
+                Direction::Input,
+                None,
+                pw::stream::StreamFlags::AUTOCONNECT
+                    | pw::stream::StreamFlags::MAP_BUFFERS
+                    | pw::stream::StreamFlags::RT_PROCESS,
+                &mut params,
             )
-            .register();
+            .map_err(|e| format!("Failed to connect stream: {}", e))?;
 
-        // 5. Try PipeWire's auto-connect first
-        let direction = Direction::Input;
-        let mut params: Vec<&Pod> = Vec::new();
+        println!("DEBUG: Stream connected with AUTOCONNECT flag");
 
-        // First, try PipeWire's auto-connect
-        match stream.connect(
-            direction,
-            None,
-            pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
-            &mut params,
-        ) {
-            Ok(_) => println!("DEBUG: Stream connected with AUTOCONNECT flag"),
-            Err(e) => println!("WARN: Stream auto-connect failed: {}", e),
-        }
-
-        // 6. Wait for stream to initialize
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-
-        // 7. Run the main loop
-        let loop_ref = mainloop.loop_();
+        // 9. Run the main loop
         while running.load(Ordering::SeqCst) {
-            loop_ref.iterate(Duration::from_millis(10));
-            thread::sleep(Duration::from_millis(10));
+            let timeout = Duration::from_millis(10);
+            mainloop.loop_().iterate(timeout);
+
+            // Small sleep to prevent CPU spin
+            thread::sleep(Duration::from_millis(1));
         }
 
         Ok(())
