@@ -62,7 +62,7 @@ pub struct AudioTab {
     pub preferences: Arc<Mutex<AppPreferences>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct AppPreferences {
     pub system_wide_config: bool,
 }
@@ -145,14 +145,6 @@ const CONFIG_MODES: &[(&str, &str)] = &[
     ("global", "Global System Settings (All Applications)"),
     ("exclusive", "Exclusive Mode (Single Application)"),
 ];
-
-impl Default for AppPreferences {
-    fn default() -> Self {
-        Self {
-            system_wide_config: false, // Default to user config
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub enum TabType {
@@ -395,10 +387,10 @@ impl AudioTab {
             directories::ProjectDirs::from("com", "proaudioconfig", "Pro Audio Config")
         {
             let prefs_path = prefs_dir.config_dir().join("preferences.toml");
-            if let Ok(content) = fs::read_to_string(&prefs_path) {
-                if let Ok(prefs) = toml::from_str(&content) {
-                    return prefs;
-                }
+            if let Ok(content) = fs::read_to_string(&prefs_path)
+                && let Ok(prefs) = toml::from_str(&content)
+            {
+                return prefs;
             }
         }
         AppPreferences::default()
@@ -832,7 +824,7 @@ impl AudioTab {
                                 .set_active_id(Some(&settings.buffer_size.to_string()));
                         }
                         Err(e) => {
-                            println!("Failed to detect current {} settings: {}", "audio", e);
+                            println!("Failed to detect current audio settings: {}", e);
                             // Set defaults if detection fails
                             sample_rate_combo.set_active_id(Some("48000"));
                             bit_depth_combo.set_active_id(Some("24"));
@@ -1091,6 +1083,12 @@ impl AudioTab {
         } else {
             Some(cleaned)
         }
+    }
+}
+
+impl Default for AdvancedTab {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1738,20 +1736,19 @@ impl AdvancedTab {
             let latency_label = latency_label.clone();
 
             exclusive_buffer_size_combo.connect_changed(move |combo| {
-                if let Some(buffer_size_str) = combo.active_id() {
-                    if let Some(sample_rate_str) = exclusive_sample_rate_combo.active_id() {
-                        if let (Ok(buffer_size), Ok(sample_rate)) = (
-                            buffer_size_str.parse::<u32>(),
-                            sample_rate_str.parse::<u32>(),
-                        ) {
-                            let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
-                            latency_label.set_text(&format!(
-                                "Calculated Latency: {:.2}ms @ {}kHz",
-                                latency_ms,
-                                sample_rate / 1000
-                            ));
-                        }
-                    }
+                if let Some(buffer_size_str) = combo.active_id()
+                    && let Some(sample_rate_str) = exclusive_sample_rate_combo.active_id()
+                    && let (Ok(buffer_size), Ok(sample_rate)) = (
+                        buffer_size_str.parse::<u32>(),
+                        sample_rate_str.parse::<u32>(),
+                    )
+                {
+                    let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
+                    latency_label.set_text(&format!(
+                        "Calculated Latency: {:.2}ms @ {}kHz",
+                        latency_ms,
+                        sample_rate / 1000
+                    ));
                 }
             });
         }
@@ -1762,20 +1759,19 @@ impl AdvancedTab {
             let latency_label = latency_label.clone();
 
             exclusive_sample_rate_combo.connect_changed(move |combo| {
-                if let Some(sample_rate_str) = combo.active_id() {
-                    if let Some(buffer_size_str) = exclusive_buffer_size_combo.active_id() {
-                        if let (Ok(buffer_size), Ok(sample_rate)) = (
-                            buffer_size_str.parse::<u32>(),
-                            sample_rate_str.parse::<u32>(),
-                        ) {
-                            let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
-                            latency_label.set_text(&format!(
-                                "Calculated Latency: {:.2}ms @ {}kHz",
-                                latency_ms,
-                                sample_rate / 1000
-                            ));
-                        }
-                    }
+                if let Some(sample_rate_str) = combo.active_id()
+                    && let Some(buffer_size_str) = exclusive_buffer_size_combo.active_id()
+                    && let (Ok(buffer_size), Ok(sample_rate)) = (
+                        buffer_size_str.parse::<u32>(),
+                        sample_rate_str.parse::<u32>(),
+                    )
+                {
+                    let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
+                    latency_label.set_text(&format!(
+                        "Calculated Latency: {:.2}ms @ {}kHz",
+                        latency_ms,
+                        sample_rate / 1000
+                    ));
                 }
             });
         }
@@ -2259,10 +2255,10 @@ pub fn show_about_dialog() {
 fn get_main_window() -> gtk::Window {
     // Try to find the application's main window from toplevel widgets
     for widget in gtk::Window::list_toplevels() {
-        if let Some(window) = widget.downcast_ref::<gtk::Window>() {
-            if window.is_visible() {
-                return window.clone();
-            }
+        if let Some(window) = widget.downcast_ref::<gtk::Window>()
+            && window.is_visible()
+        {
+            return window.clone();
         }
     }
 

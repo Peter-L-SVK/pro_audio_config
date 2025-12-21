@@ -16,8 +16,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::audio::{clear_cache, detect_output_audio_device, extract_actual_device_name};
-
 // ====== AUTO-CONNECT FUNCTION (PUBLIC, MODULE LEVEL) ======
 
 pub fn auto_connect_monitor_delayed() -> Result<(), String> {
@@ -69,10 +67,7 @@ pub fn auto_connect_monitor_delayed() -> Result<(), String> {
         if let Some(colon_pos) = port.rfind(':') {
             let device = port[..colon_pos].to_string();
             let channel_port = port.to_string();
-            devices
-                .entry(device)
-                .or_insert_with(Vec::new)
-                .push(channel_port);
+            devices.entry(device).or_default().push(channel_port);
         }
     }
 
@@ -101,7 +96,7 @@ pub fn auto_connect_monitor_delayed() -> Result<(), String> {
             devices
                 .keys()
                 .find(|device| device.contains(&active_device))
-                .map(|d| d.clone())
+                .cloned()
                 .unwrap_or_else(|| devices.keys().next().unwrap().clone())
         } else {
             // Fallback: choose device with most channels
@@ -210,6 +205,12 @@ pub struct PipeWireMonitor {
     use_real_monitoring: Arc<AtomicBool>,
 }
 
+impl Default for PipeWireMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PipeWireMonitor {
     pub fn new() -> Self {
         // Auto-detect if PipeWire is available
@@ -232,20 +233,18 @@ impl PipeWireMonitor {
         if let Ok(output) = Command::new("systemctl")
             .args(["--user", "is-active", "pipewire.service"])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                return true;
-            }
+            return true;
         }
 
         // Method 3: Check if pipewire-pulse is running
         if let Ok(output) = Command::new("systemctl")
             .args(["--user", "is-active", "pipewire-pulse.service"])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                return true;
-            }
+            return true;
         }
 
         // Method 4: Check for pipewire binary
@@ -284,7 +283,6 @@ impl PipeWireMonitor {
                 match Self::start_real_monitoring(Arc::clone(&running), sender) {
                     Ok(_) => {
                         println!("INFO: Real monitoring completed");
-                        return;
                     }
                     Err(e) => {
                         eprintln!("WARNING: Real monitoring failed: {}", e);
@@ -330,7 +328,7 @@ impl PipeWireMonitor {
         use libspa::pod::Pod;
         use libspa::utils::Direction;
         use pipewire as pw;
-        use std::ffi::CString;
+
         use std::time::Duration;
 
         unsafe {
@@ -419,7 +417,7 @@ impl PipeWireMonitor {
 
                             // Find peak values (assuming stereo interleaved format)
                             for chunk in f32_slice.chunks(2) {
-                                if let Some(&left) = chunk.get(0) {
+                                if let Some(&left) = chunk.first() {
                                     user_data.left_peak = user_data.left_peak.max(left.abs());
                                 }
                                 if let Some(&right) = chunk.get(1) {
@@ -429,25 +427,25 @@ impl PipeWireMonitor {
                         }
 
                         // Send updates periodically (every 100ms)
-                        if let Some(last) = user_data.last_update {
-                            if last.elapsed() >= Duration::from_millis(100) {
-                                let left_db = 20.0 * (user_data.left_peak.max(0.0001).log10());
-                                let right_db = 20.0 * (user_data.right_peak.max(0.0001).log10());
+                        if let Some(last) = user_data.last_update
+                            && last.elapsed() >= Duration::from_millis(100)
+                        {
+                            let left_db = 20.0 * (user_data.left_peak.max(0.0001).log10());
+                            let right_db = 20.0 * (user_data.right_peak.max(0.0001).log10());
 
-                                let left_level = ((left_db + 60.0) / 60.0).clamp(0.0, 1.0) as f64;
-                                let right_level = ((right_db + 60.0) / 60.0).clamp(0.0, 1.0) as f64;
+                            let left_level = ((left_db + 60.0) / 60.0).clamp(0.0, 1.0) as f64;
+                            let right_level = ((right_db + 60.0) / 60.0).clamp(0.0, 1.0) as f64;
 
-                                let _ = sender_clone.send(AudioLevels {
-                                    left_peak: left_level,
-                                    right_peak: right_level,
-                                    left_db: format!("{:.1} dB", left_db),
-                                    right_db: format!("{:.1} dB", right_db),
-                                });
+                            let _ = sender_clone.send(AudioLevels {
+                                left_peak: left_level,
+                                right_peak: right_level,
+                                left_db: format!("{:.1} dB", left_db),
+                                right_db: format!("{:.1} dB", right_db),
+                            });
 
-                                user_data.left_peak = 0.0;
-                                user_data.right_peak = 0.0;
-                                user_data.last_update = Some(std::time::Instant::now());
-                            }
+                            user_data.left_peak = 0.0;
+                            user_data.right_peak = 0.0;
+                            user_data.last_update = Some(std::time::Instant::now());
                         }
                     }
                 }

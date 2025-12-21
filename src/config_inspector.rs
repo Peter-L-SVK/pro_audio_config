@@ -11,8 +11,8 @@ use chrono::{DateTime, Local};
 use glib::ControlFlow;
 use gtk::prelude::*;
 use gtk::{
-    Box as GtkBox, Button, CellRendererText, Frame, Image, Label, ListStore, Orientation,
-    ScrolledWindow, Separator, TreeView, TreeViewColumn, Window,
+    Box as GtkBox, Button, CellRendererText, Frame, Label, ListStore, Orientation, ScrolledWindow,
+    Separator, TreeView, TreeViewColumn, Window,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -44,6 +44,12 @@ pub struct ConfigInspectorTab {
     pub refresh_button: Button,
     pub user_store: ListStore,
     pub system_store: ListStore,
+}
+
+impl Default for ConfigInspectorTab {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConfigInspectorTab {
@@ -385,7 +391,7 @@ done"#,
 
             let temp_script = format!("/tmp/proaudio_edit_{}.sh", std::process::id());
 
-            if let Ok(_) = std::fs::write(&temp_script, &script) {
+            if std::fs::write(&temp_script, &script).is_ok() {
                 let _ = Command::new("chmod").args(["+x", &temp_script]).status();
 
                 // Try to execute the script
@@ -471,13 +477,13 @@ done"#,
                     // Clear and update user store
                     user_store.clear();
                     for config in &user_configs {
-                        Self::add_config_to_store(&user_store, &config);
+                        Self::add_config_to_store(&user_store, config);
                     }
 
                     // Clear and update system store
                     system_store.clear();
                     for config in &system_configs {
-                        Self::add_config_to_store(&system_store, &config);
+                        Self::add_config_to_store(&system_store, config);
                     }
 
                     status_label.set_text(&format!(
@@ -512,51 +518,38 @@ done"#,
 
         // Scan PipeWire configs
         let pipewire_dir = base_path.join(".config/pipewire/pipewire.conf.d");
-        if pipewire_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&pipewire_dir) {
-                for entry in entries.flatten() {
-                    if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_file() {
-                            if let Some(filename) = entry.file_name().to_str() {
-                                if filename.ends_with(".conf") {
-                                    if let Ok(info) = Self::get_file_info(
-                                        &entry.path(),
-                                        is_system,
-                                        active_properties,
-                                    ) {
-                                        configs.push(info);
-                                    }
-                                }
-                            }
-                        }
-                    }
+        if pipewire_dir.exists()
+            && let Ok(entries) = fs::read_dir(&pipewire_dir)
+        {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type()
+                    && file_type.is_file()
+                    && let Some(filename) = entry.file_name().to_str()
+                    && filename.ends_with(".conf")
+                    && let Ok(info) =
+                        Self::get_file_info(&entry.path(), is_system, active_properties)
+                {
+                    configs.push(info);
                 }
             }
         }
 
         // Scan WirePlumber configs
         let wireplumber_dir = base_path.join(".config/wireplumber");
-        if wireplumber_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&wireplumber_dir) {
-                for entry in entries.flatten() {
-                    if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_file() {
-                            if let Some(filename) = entry.file_name().to_str() {
-                                if filename.ends_with(".conf")
-                                    || filename.ends_with(".lua")
-                                    || filename.ends_with(".json")
-                                {
-                                    if let Ok(info) = Self::get_file_info(
-                                        &entry.path(),
-                                        is_system,
-                                        active_properties,
-                                    ) {
-                                        configs.push(info);
-                                    }
-                                }
-                            }
-                        }
-                    }
+        if wireplumber_dir.exists()
+            && let Ok(entries) = fs::read_dir(&wireplumber_dir)
+        {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type()
+                    && file_type.is_file()
+                    && let Some(filename) = entry.file_name().to_str()
+                    && (filename.ends_with(".conf")
+                        || filename.ends_with(".lua")
+                        || filename.ends_with(".json"))
+                    && let Ok(info) =
+                        Self::get_file_info(&entry.path(), is_system, active_properties)
+                {
+                    configs.push(info);
                 }
             }
         }
@@ -567,27 +560,20 @@ done"#,
             let etc_wireplumber = Path::new("/etc/wireplumber");
 
             for dir in &[etc_pipewire, etc_wireplumber] {
-                if dir.exists() {
-                    if let Ok(entries) = fs::read_dir(dir) {
-                        for entry in entries.flatten() {
-                            if let Ok(file_type) = entry.file_type() {
-                                if file_type.is_file() {
-                                    if let Some(filename) = entry.file_name().to_str() {
-                                        if filename.ends_with(".conf")
-                                            || filename.ends_with(".lua")
-                                            || filename.ends_with(".json")
-                                        {
-                                            if let Ok(info) = Self::get_file_info(
-                                                &entry.path(),
-                                                is_system,
-                                                active_properties,
-                                            ) {
-                                                configs.push(info);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                if dir.exists()
+                    && let Ok(entries) = fs::read_dir(dir)
+                {
+                    for entry in entries.flatten() {
+                        if let Ok(file_type) = entry.file_type()
+                            && file_type.is_file()
+                            && let Some(filename) = entry.file_name().to_str()
+                            && (filename.ends_with(".conf")
+                                || filename.ends_with(".lua")
+                                || filename.ends_with(".json"))
+                            && let Ok(info) =
+                                Self::get_file_info(&entry.path(), is_system, active_properties)
+                        {
+                            configs.push(info);
                         }
                     }
                 }
@@ -690,16 +676,15 @@ done"#,
         let mut properties = HashMap::new();
 
         // Run pw-dump to get current PipeWire state
-        if let Ok(output) = Command::new("pw-dump").output() {
-            if let Ok(json_str) = String::from_utf8(output.stdout) {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&json_str) {
-                    // Parse the JSON to find pro-audio properties
-                    if let Some(array) = parsed.as_array() {
-                        for item in array {
-                            if let Some(props) = item.get("info").and_then(|i| i.get("props")) {
-                                Self::extract_properties(props, &mut properties);
-                            }
-                        }
+        if let Ok(output) = Command::new("pw-dump").output()
+            && let Ok(json_str) = String::from_utf8(output.stdout)
+            && let Ok(parsed) = serde_json::from_str::<Value>(&json_str)
+        {
+            // Parse the JSON to find pro-audio properties
+            if let Some(array) = parsed.as_array() {
+                for item in array {
+                    if let Some(props) = item.get("info").and_then(|i| i.get("props")) {
+                        Self::extract_properties(props, &mut properties);
                     }
                 }
             }
@@ -714,11 +699,11 @@ done"#,
                 for (key, val) in map {
                     if key.contains("pro-audio") || key.contains("ProAudio") || key.contains("99-")
                     {
-                        let files = properties.entry(key.clone()).or_insert_with(Vec::new);
-                        if let Some(filename) = Self::extract_filename_from_value(val) {
-                            if !files.contains(&filename) {
-                                files.push(filename);
-                            }
+                        let files = properties.entry(key.clone()).or_default();
+                        if let Some(filename) = Self::extract_filename_from_value(val)
+                            && !files.contains(&filename)
+                        {
+                            files.push(filename);
                         }
                     } else if val.is_object() {
                         Self::extract_properties(val, properties);

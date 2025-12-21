@@ -184,6 +184,12 @@ fn manual_pw_link_connection() -> Result<(), String> {
     }
 }
 
+impl Default for MonitoringTab {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MonitoringTab {
     pub fn new() -> Self {
         // Load CSS styles first

@@ -138,11 +138,11 @@ fn is_valid_device_id(device_id: &str) -> bool {
 // Device Detection Functions
 pub fn detect_all_audio_devices() -> Result<Vec<AudioDevice>, String> {
     // Check cache first
-    if let Some(cached) = CACHED_ALL_DEVICES.lock().unwrap().as_ref() {
-        if cached.1.elapsed() < CACHE_DURATION {
-            println!("DEBUG: Returning cached all devices");
-            return Ok(cached.0.clone());
-        }
+    if let Some(cached) = CACHED_ALL_DEVICES.lock().unwrap().as_ref()
+        && cached.1.elapsed() < CACHE_DURATION
+    {
+        println!("DEBUG: Returning cached all devices");
+        return Ok(cached.0.clone());
     }
 
     let mut devices = Vec::new();
@@ -169,11 +169,11 @@ pub fn detect_all_audio_devices() -> Result<Vec<AudioDevice>, String> {
 // New functions for separate input/output detection
 pub fn detect_output_audio_devices() -> Result<Vec<AudioDevice>, String> {
     // Check cache first
-    if let Some(cached) = CACHED_OUTPUT_DEVICES.lock().unwrap().as_ref() {
-        if cached.1.elapsed() < CACHE_DURATION {
-            println!("DEBUG: Returning cached output devices");
-            return Ok(cached.0.clone());
-        }
+    if let Some(cached) = CACHED_OUTPUT_DEVICES.lock().unwrap().as_ref()
+        && cached.1.elapsed() < CACHE_DURATION
+    {
+        println!("DEBUG: Returning cached output devices");
+        return Ok(cached.0.clone());
     }
 
     let mut devices = Vec::new();
@@ -205,11 +205,11 @@ pub fn detect_output_audio_devices() -> Result<Vec<AudioDevice>, String> {
 
 pub fn detect_input_audio_devices() -> Result<Vec<AudioDevice>, String> {
     // Check cache first
-    if let Some(cached) = CACHED_INPUT_DEVICES.lock().unwrap().as_ref() {
-        if cached.1.elapsed() < CACHE_DURATION {
-            println!("DEBUG: Returning cached input devices");
-            return Ok(cached.0.clone());
-        }
+    if let Some(cached) = CACHED_INPUT_DEVICES.lock().unwrap().as_ref()
+        && cached.1.elapsed() < CACHE_DURATION
+    {
+        println!("DEBUG: Returning cached input devices");
+        return Ok(cached.0.clone());
     }
 
     let mut devices = Vec::new();
@@ -313,10 +313,10 @@ fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
 
     for line in output_str.lines() {
         if line.contains("object:") && line.contains("Node") {
-            if let Some(device) = current_device.take() {
-                if is_real_hardware_device(&device) {
-                    devices.push(device);
-                }
+            if let Some(device) = current_device.take()
+                && is_real_hardware_device(&device)
+            {
+                devices.push(device);
             }
             current_device = Some(AudioDevice {
                 name: "Unknown".to_string(),
@@ -328,31 +328,34 @@ fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
         }
 
         if let Some(ref mut device) = current_device {
-            if line.contains("node.name") && line.contains('=') {
-                if let Some(name) = line.split('=').nth(1) {
-                    device.name = name.trim().trim_matches('"').to_string();
-                }
+            if line.contains("node.name")
+                && line.contains('=')
+                && let Some(name) = line.split('=').nth(1)
+            {
+                device.name = name.trim().trim_matches('"').to_string();
             }
 
-            if line.contains("node.description") && line.contains('=') {
-                if let Some(desc) = line.split('=').nth(1) {
-                    device.description = desc.trim().trim_matches('"').to_string();
-                }
+            if line.contains("node.description")
+                && line.contains('=')
+                && let Some(desc) = line.split('=').nth(1)
+            {
+                device.description = desc.trim().trim_matches('"').to_string();
             }
 
-            if line.contains("media.class") && line.contains('=') {
-                if let Some(class) = line.split('=').nth(1) {
-                    let class_clean = class.trim().trim_matches('"');
-                    device.device_type = classify_device_type(class_clean, device);
-                }
+            if line.contains("media.class")
+                && line.contains('=')
+                && let Some(class) = line.split('=').nth(1)
+            {
+                let class_clean = class.trim().trim_matches('"');
+                device.device_type = classify_device_type(class_clean, device);
             }
         }
     }
 
-    if let Some(device) = current_device.take() {
-        if is_real_hardware_device(&device) {
-            devices.push(device);
-        }
+    if let Some(device) = current_device.take()
+        && is_real_hardware_device(&device)
+    {
+        devices.push(device);
     }
 
     Ok(devices)
@@ -543,14 +546,14 @@ fn extract_id(line: &str) -> String {
 pub fn detect_audio_device() -> Result<String, String> {
     let audio_system = detect_audio_system();
 
-    if let Ok(output) = Command::new("pactl").args(["info"]).output() {
-        if output.status.success() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
-                if line.starts_with("Default Sink:") {
-                    let sink = line.replace("Default Sink:", "").trim().to_string();
-                    return Ok(format!("{}: {}", audio_system, sink));
-                }
+    if let Ok(output) = Command::new("pactl").args(["info"]).output()
+        && output.status.success()
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if line.starts_with("Default Sink:") {
+                let sink = line.replace("Default Sink:", "").trim().to_string();
+                return Ok(format!("{}: {}", audio_system, sink));
             }
         }
     }
@@ -561,28 +564,28 @@ pub fn detect_audio_device() -> Result<String, String> {
 // New functions for detecting current input/output devices
 pub fn detect_output_audio_device() -> Result<String, String> {
     // Check cache first
-    if let Some(cached) = CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap().as_ref() {
-        if cached.1.elapsed() < CACHE_DURATION {
-            println!("DEBUG: Returning cached output device");
-            return Ok(cached.0.clone());
-        }
+    if let Some(cached) = CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap().as_ref()
+        && cached.1.elapsed() < CACHE_DURATION
+    {
+        println!("DEBUG: Returning cached output device");
+        return Ok(cached.0.clone());
     }
 
     let audio_system = detect_audio_system();
 
-    if let Ok(output) = Command::new("pactl").args(["info"]).output() {
-        if output.status.success() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
-                if line.starts_with("Default Sink:") {
-                    let sink = line.replace("Default Sink:", "").trim().to_string();
-                    let result = format!("{}: {}", audio_system, sink);
+    if let Ok(output) = Command::new("pactl").args(["info"]).output()
+        && output.status.success()
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if line.starts_with("Default Sink:") {
+                let sink = line.replace("Default Sink:", "").trim().to_string();
+                let result = format!("{}: {}", audio_system, sink);
 
-                    // Update cache
-                    *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() =
-                        Some((result.clone(), Instant::now()));
-                    return Ok(result);
-                }
+                // Update cache
+                *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() =
+                    Some((result.clone(), Instant::now()));
+                return Ok(result);
             }
         }
     }
@@ -594,28 +597,28 @@ pub fn detect_output_audio_device() -> Result<String, String> {
 
 pub fn detect_input_audio_device() -> Result<String, String> {
     // Check cache first
-    if let Some(cached) = CACHED_CURRENT_INPUT_DEVICE.lock().unwrap().as_ref() {
-        if cached.1.elapsed() < CACHE_DURATION {
-            println!("DEBUG: Returning cached input device");
-            return Ok(cached.0.clone());
-        }
+    if let Some(cached) = CACHED_CURRENT_INPUT_DEVICE.lock().unwrap().as_ref()
+        && cached.1.elapsed() < CACHE_DURATION
+    {
+        println!("DEBUG: Returning cached input device");
+        return Ok(cached.0.clone());
     }
 
     let audio_system = detect_audio_system();
 
-    if let Ok(output) = Command::new("pactl").args(["info"]).output() {
-        if output.status.success() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
-                if line.starts_with("Default Source:") {
-                    let source = line.replace("Default Source:", "").trim().to_string();
-                    let result = format!("{}: {}", audio_system, source);
+    if let Ok(output) = Command::new("pactl").args(["info"]).output()
+        && output.status.success()
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if line.starts_with("Default Source:") {
+                let source = line.replace("Default Source:", "").trim().to_string();
+                let result = format!("{}: {}", audio_system, source);
 
-                    // Update cache
-                    *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() =
-                        Some((result.clone(), Instant::now()));
-                    return Ok(result);
-                }
+                // Update cache
+                *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() =
+                    Some((result.clone(), Instant::now()));
+                return Ok(result);
             }
         }
     }
@@ -627,11 +630,11 @@ pub fn detect_input_audio_device() -> Result<String, String> {
 
 pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
     // Check cache first
-    if let Some(cached) = CACHED_AUDIO_SETTINGS.lock().unwrap().as_ref() {
-        if cached.1.elapsed() < CACHE_DURATION {
-            println!("DEBUG: Returning cached audio settings");
-            return Ok(cached.0.clone());
-        }
+    if let Some(cached) = CACHED_AUDIO_SETTINGS.lock().unwrap().as_ref()
+        && cached.1.elapsed() < CACHE_DURATION
+    {
+        println!("DEBUG: Returning cached audio settings");
+        return Ok(cached.0.clone());
     }
 
     println!("=== DEBUG: Starting audio settings detection ===");
@@ -688,36 +691,36 @@ fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
         if trimmed.contains("default.clock.rate")
             && trimmed.contains('=')
             && !trimmed.contains("allowed-rates")
+            && let Some(rate_str) = trimmed.split('=').nth(1)
         {
-            if let Some(rate_str) = trimmed.split('=').nth(1) {
-                let rate_clean = rate_str
-                    .trim()
-                    .trim_matches('"')
-                    .trim()
-                    .trim_start_matches('*')
-                    .trim();
-                if let Ok(rate) = rate_clean.parse::<u32>() {
-                    sample_rate = rate;
-                }
+            let rate_clean = rate_str
+                .trim()
+                .trim_matches('"')
+                .trim()
+                .trim_start_matches('*')
+                .trim();
+            if let Ok(rate) = rate_clean.parse::<u32>() {
+                sample_rate = rate;
             }
         }
 
         // Audio format
-        if trimmed.contains("audio.format") && trimmed.contains('=') {
-            if let Some(format_str) = trimmed.split('=').nth(1) {
-                let format = format_str
-                    .trim()
-                    .trim_matches('"')
-                    .trim()
-                    .trim_start_matches('*')
-                    .trim();
-                bit_depth = match format {
-                    "S16LE" => 16,
-                    "S24LE" => 24,
-                    "S32LE" => 32,
-                    _ => 24,
-                };
-            }
+        if trimmed.contains("audio.format")
+            && trimmed.contains('=')
+            && let Some(format_str) = trimmed.split('=').nth(1)
+        {
+            let format = format_str
+                .trim()
+                .trim_matches('"')
+                .trim()
+                .trim_start_matches('*')
+                .trim();
+            bit_depth = match format {
+                "S16LE" => 16,
+                "S24LE" => 24,
+                "S32LE" => 32,
+                _ => 24,
+            };
         }
 
         // Buffer size - ONLY use default.clock.quantum, ignore quantum-limit
@@ -727,17 +730,16 @@ fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
             && !trimmed.contains("max-quantum")
             && !trimmed.contains("quantum-limit")
             && !trimmed.contains("quantum-floor")
+            && let Some(quantum_str) = trimmed.split('=').nth(1)
         {
-            if let Some(quantum_str) = trimmed.split('=').nth(1) {
-                let quantum_clean = quantum_str
-                    .trim()
-                    .trim_matches('"')
-                    .trim()
-                    .trim_start_matches('*')
-                    .trim();
-                if let Ok(quantum) = quantum_clean.parse::<u32>() {
-                    buffer_size = quantum;
-                }
+            let quantum_clean = quantum_str
+                .trim()
+                .trim_matches('"')
+                .trim()
+                .trim_start_matches('*')
+                .trim();
+            if let Ok(quantum) = quantum_clean.parse::<u32>() {
+                buffer_size = quantum;
             }
         }
     }
@@ -787,24 +789,26 @@ pub fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
 
     // Try to find device.name first (preferred for WirePlumber)
     for line in output_str.lines() {
-        if line.contains("device.name") && line.contains('=') {
-            if let Some(name_part) = line.split('=').nth(1) {
-                let name = name_part.trim().trim_matches('"').to_string();
-                if !name.is_empty() {
-                    return Ok(name);
-                }
+        if line.contains("device.name")
+            && line.contains('=')
+            && let Some(name_part) = line.split('=').nth(1)
+        {
+            let name = name_part.trim().trim_matches('"').to_string();
+            if !name.is_empty() {
+                return Ok(name);
             }
         }
     }
 
     // Fall back to node.name
     for line in output_str.lines() {
-        if line.contains("node.name") && line.contains('=') {
-            if let Some(name_part) = line.split('=').nth(1) {
-                let name = name_part.trim().trim_matches('"').to_string();
-                if !name.is_empty() {
-                    return Ok(name);
-                }
+        if line.contains("node.name")
+            && line.contains('=')
+            && let Some(name_part) = line.split('=').nth(1)
+        {
+            let name = name_part.trim().trim_matches('"').to_string();
+            if !name.is_empty() {
+                return Ok(name);
             }
         }
     }
@@ -974,34 +978,37 @@ fn parse_device_capabilities(
         }
 
         if in_target_device {
-            if line.contains("audio.rate") && line.contains('=') {
-                if let Some(rate_str) = line.split('=').nth(1) {
-                    let rate_clean = rate_str.trim().trim_matches('"');
-                    if let Ok(rate) = rate_clean.parse::<u32>() {
-                        if !sample_rates.contains(&rate) {
-                            sample_rates.push(rate);
-                        }
-                    }
+            if line.contains("audio.rate")
+                && line.contains('=')
+                && let Some(rate_str) = line.split('=').nth(1)
+            {
+                let rate_clean = rate_str.trim().trim_matches('"');
+                if let Ok(rate) = rate_clean.parse::<u32>()
+                    && !sample_rates.contains(&rate)
+                {
+                    sample_rates.push(rate);
                 }
             }
 
-            if line.contains("audio.format") && line.contains('=') {
-                if let Some(format_str) = line.split('=').nth(1) {
-                    let format_clean = format_str.trim().trim_matches('"');
-                    if !formats.contains(&format_clean.to_string()) {
-                        formats.push(format_clean.to_string());
-                    }
+            if line.contains("audio.format")
+                && line.contains('=')
+                && let Some(format_str) = line.split('=').nth(1)
+            {
+                let format_clean = format_str.trim().trim_matches('"');
+                if !formats.contains(&format_clean.to_string()) {
+                    formats.push(format_clean.to_string());
                 }
             }
 
-            if line.contains("api.alsa.period-size") && line.contains('=') {
-                if let Some(size_str) = line.split('=').nth(1) {
-                    let size_clean = size_str.trim().trim_matches('"');
-                    if let Ok(size) = size_clean.parse::<u32>() {
-                        if !buffer_sizes.contains(&size) {
-                            buffer_sizes.push(size);
-                        }
-                    }
+            if line.contains("api.alsa.period-size")
+                && line.contains('=')
+                && let Some(size_str) = line.split('=').nth(1)
+            {
+                let size_clean = size_str.trim().trim_matches('"');
+                if let Ok(size) = size_clean.parse::<u32>()
+                    && !buffer_sizes.contains(&size)
+                {
+                    buffer_sizes.push(size);
                 }
             }
         }
