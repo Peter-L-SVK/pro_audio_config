@@ -24,6 +24,9 @@
 ![Running the program](scr10.png)  
 *(Monitoring)*  
 
+![Running the program](scr16.png)  
+*(Config Inspector)*  
+
 ![Running the program in VM Ware](scr11.png)  
 *(Running program in VM Ware on Fedora Jam with KDE Plasma 6.5 "dark breeze" theme)*  
 About Feadora jam - [Fedora Jam](https://www.fedoraproject.org/labs/jam)
