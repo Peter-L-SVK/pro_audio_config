@@ -684,11 +684,12 @@ impl MonitoringTab {
             let output_str = String::from_utf8_lossy(&output.stdout);
 
             for line in output_str.lines() {
-                if line.contains("monitor_") && line.contains("pro_audio_config") {
-                    if let Some(connection_id) = line.split_whitespace().next() {
-                        println!("INFO: Disconnecting: {}", connection_id);
-                        let _ = Command::new("pw-link").args(["-d", connection_id]).status();
-                    }
+                if line.contains("monitor_")
+                    && line.contains("pro_audio_config")
+                    && let Some(connection_id) = line.split_whitespace().next()
+                {
+                    println!("INFO: Disconnecting: {}", connection_id);
+                    let _ = Command::new("pw-link").args(["-d", connection_id]).status();
                 }
             }
         }
