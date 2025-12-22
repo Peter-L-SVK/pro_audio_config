@@ -331,9 +331,7 @@ impl PipeWireMonitor {
 
         use std::time::Duration;
 
-        unsafe {
-            pw::init();
-        }
+        pw::init();
 
         // 1. Create main loop, context, and core
         let mainloop = pw::main_loop::MainLoopRc::new(None)

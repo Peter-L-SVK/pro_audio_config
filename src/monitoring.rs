@@ -42,7 +42,13 @@ enum MonitorMessage {
         right_level: f64,
         right_db: String,
     },
-    Error(String), // Add error message type
+    Error(String),
+    RestartRequest,
+    // Update button state (called from main thread)
+    UpdateButton {
+        sensitive: bool,
+        label: String,
+    },
 }
 
 #[derive(Clone)]
@@ -563,9 +569,8 @@ impl MonitoringTab {
                     right_context.add_class("clipping");
                 }
             }
-
             MonitorMessage::Error(err) => {
-                // Update status to show error
+                // Normal error handling
                 self.status_label.set_text(&format!("Error: {}", err));
                 eprintln!("Monitoring error: {}", err);
 
@@ -573,75 +578,168 @@ impl MonitoringTab {
                 self.reconnect_button.set_sensitive(true);
                 self.reconnect_button.set_label("Re-connect Monitor");
             }
+            MonitorMessage::RestartRequest => {
+                // We're already on the main thread (handle_message is called from GLib timeout)
+                // So we can safely call restart_monitoring directly
+                self.restart_monitoring();
+            }
+            MonitorMessage::UpdateButton { sensitive, label } => {
+                // Update button state
+                self.reconnect_button.set_sensitive(sensitive);
+                self.reconnect_button.set_label(&label);
+            }
         }
     }
 
     pub fn manual_reconnect(&self) {
-        // Update UI directly (we're in main thread)
-        self.status_label
-            .set_text("Attempting manual reconnection...");
+        // Update UI on the main thread (we're already on main thread here)
+        self.status_label.set_text("Restarting audio monitoring...");
         self.reconnect_button.set_sensitive(false);
-        self.reconnect_button.set_label("Connecting...");
+        self.reconnect_button.set_label("Restarting...");
 
-        // Clone sender
+        // Send a status update
+        let _ = self.sender.send(MonitorMessage::Status(
+            "Preparing to restart monitoring...".to_string(),
+        ));
+
+        // Clone only thread-safe data
         let sender = self.sender.clone();
 
-        // Get the button's widget ID or use a flag approach
+        // Spawn a thread for the potentially blocking operations
         thread::spawn(move || {
-            // First, stop any existing monitoring
-            println!("INFO: Stopping existing monitoring...");
+            // Give UI time to update
+            thread::sleep(Duration::from_millis(100));
 
-            // Clear cache
-            crate::audio::clear_cache();
-
-            // Wait a moment
-            thread::sleep(Duration::from_millis(500));
-
-            // Try multiple connection methods
-            let mut success = false;
-            let mut error_message = String::new();
-
-            // Method 1: Try the direct auto-connect
-            println!("INFO: Attempting direct connection...");
-            match crate::audio_capture::auto_connect_monitor_delayed() {
+            // Try manual connection first
+            match manual_pw_link_connection() {
                 Ok(_) => {
-                    success = true;
-                    println!("INFO: Direct connection successful");
+                    println!("INFO: Manual connection successful");
+                    let _ = sender.send(MonitorMessage::Status(
+                        "✓ Manual connection established".to_string(),
+                    ));
+
+                    // Still request a restart to ensure everything is fresh
+                    thread::sleep(Duration::from_millis(500));
+                    let _ = sender.send(MonitorMessage::RestartRequest);
                 }
                 Err(e) => {
-                    error_message = format!("Direct connection failed: {}", e);
-                    println!("WARN: {}", error_message);
+                    println!("WARN: Manual connection failed: {}", e);
+
+                    // Send error message
+                    let _ = sender.send(MonitorMessage::Error(format!(
+                        "Manual connection failed: {}. Attempting auto-restart...",
+                        e
+                    )));
+
+                    // Still try to restart
+                    thread::sleep(Duration::from_millis(500));
+                    let _ = sender.send(MonitorMessage::RestartRequest);
                 }
             }
 
-            // Method 2: If direct connection fails, try manual pw-link commands
-            if !success {
-                println!("INFO: Trying manual pw-link connection...");
-                match manual_pw_link_connection() {
+            // Re-enable the button after a delay
+            thread::sleep(Duration::from_millis(2000));
+            let _ = sender.send(MonitorMessage::UpdateButton {
+                sensitive: true,
+                label: "Re-connect Monitor".to_string(),
+            });
+        });
+    }
+
+    pub fn restart_monitoring(&self) {
+        println!("INFO: Restarting entire monitoring system...");
+
+        // First, stop current monitoring
+        self.stop_monitoring();
+
+        // Wait a bit
+        thread::sleep(Duration::from_millis(1000));
+
+        // Clear any cached audio data
+        crate::audio::clear_cache();
+
+        // Clean up existing PipeWire connections
+        self.cleanup_pipewire_connections();
+
+        // Wait for cleanup
+        thread::sleep(Duration::from_millis(500));
+
+        // Restart monitoring
+        self.start_monitoring();
+
+        // Wait for monitor to initialize
+        thread::sleep(Duration::from_millis(2000));
+
+        // Try to auto-connect
+        self.auto_connect_with_retry();
+    }
+
+    fn cleanup_pipewire_connections(&self) {
+        use std::process::Command;
+
+        println!("INFO: Cleaning up PipeWire connections...");
+
+        // Method 1: Disconnect all monitor connections
+        if let Ok(output) = Command::new("pw-link").args(["--links"]).output() {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+
+            for line in output_str.lines() {
+                if line.contains("monitor_") && line.contains("pro_audio_config") {
+                    if let Some(connection_id) = line.split_whitespace().next() {
+                        println!("INFO: Disconnecting: {}", connection_id);
+                        let _ = Command::new("pw-link").args(["-d", connection_id]).status();
+                    }
+                }
+            }
+        }
+
+        // Method 2: Use pattern matching
+        let _ = Command::new("pw-link")
+            .args(["-d", "-I", "pro_audio_config:input_*"])
+            .status();
+
+        // Method 3: Kill any pipewire-monitor related processes
+        let _ = Command::new("pkill")
+            .arg("-f")
+            .arg("pipewire-monitor")
+            .status();
+    }
+
+    fn auto_connect_with_retry(&self) {
+        let sender = self.sender.clone();
+
+        thread::spawn(move || {
+            println!("INFO: Starting auto-connect with retry...");
+
+            for attempt in 1..=5 {
+                println!("INFO: Auto-connect attempt {}/5", attempt);
+
+                match crate::audio_capture::auto_connect_monitor_delayed() {
                     Ok(_) => {
-                        success = true;
-                        println!("INFO: Manual pw-link connection successful");
+                        println!("INFO: Auto-connect successful on attempt {}", attempt);
+                        let _ = sender.send(MonitorMessage::Status(format!(
+                            "✓ Connected on attempt {}",
+                            attempt
+                        )));
+                        return;
                     }
                     Err(e) => {
-                        error_message = format!("Manual connection also failed: {}", e);
-                        println!("WARN: {}", error_message);
+                        println!("WARN: Attempt {} failed: {}", attempt, e);
+
+                        if attempt < 5 {
+                            let _ = sender.send(MonitorMessage::Status(format!(
+                                "Retrying connection... ({}/5)",
+                                attempt + 1
+                            )));
+                            thread::sleep(Duration::from_secs(2)); // Wait longer between retries
+                        } else {
+                            let _ = sender.send(MonitorMessage::Error(format!(
+                                "Failed to auto-connect after {} attempts: {}",
+                                attempt, e
+                            )));
+                        }
                     }
                 }
-            }
-
-            if success {
-                let _ = sender.send(MonitorMessage::Status(
-                    "✓ Manual reconnection successful".to_string(),
-                ));
-                let _ = sender.send(MonitorMessage::Status("BUTTON_RESET".to_string()));
-            } else {
-                let _ = sender.send(MonitorMessage::Error(format!(
-                    "Manual reconnection failed: {}",
-                    error_message
-                )));
-                let _ = sender.send(MonitorMessage::Status(
-                    "BUTTON_RESET_ERROR:".to_string() + &error_message,
-                ));
             }
         });
     }
