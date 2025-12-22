@@ -98,7 +98,7 @@ fix(device-detection): Handle USB audio device hot-plugging [issue #23]
 
 2. **Build the project**
    ```bash
-   cargo build
+   cargo build # -- feature flag
    ```
 
 3. **Run tests**

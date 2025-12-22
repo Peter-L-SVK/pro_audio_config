@@ -24,6 +24,9 @@ All current features and running on different OSes are showcased in the  [Galler
 - **DB Scale Display**: Accurate decibel readings with peak and RMS calculations
 - **Auto-detection Fallback**: Intelligent fallback to simulation mode when PipeWire isn't available
 - **Professional Metering**: Studio-grade level monitoring with proper threshold matching industry standards
+- **Manual Reconnection**: Reconnect button for monitoring recovery with multi-attempt strategy
+- **Service Health Checks**: Automatic PipeWire service monitoring and restart capability
+- **Connection Management**: Cleanup of stale monitor ports and PID change handling
 
 ### 🔧 **Device and Configuration Management**
 - **Device Detection**: Automatically detects and displays current audio devices (PipeWire, ALSA, PulseAudio)
@@ -38,8 +41,18 @@ All current features and running on different OSes are showcased in the  [Galler
 ### 🗂️ **Multi-Tab Interface**
 - **Separate Input/Output Configuration**: Dedicated tabs for playback (output) and recording (input) devices
 - **Real-time Monitoring Tab**: Dedicated monitoring interface with live audio meters
+- **Configuration Inspector Tab**: Comprehensive view of all PipeWire/WirePlumber configuration files with active status
 - **Independent Settings Management**: Configure input and output devices with different sample rates, bit depths, and buffer sizes
-- **Clear Visual Separation**: Intuitive tabbed interface that clearly distinguishes between recording, playback, and monitoring functions
+- **Clear Visual Separation**: Intuitive tabbed interface that clearly distinguishes between recording, playback, monitoring, and configuration inspection
+
+### 🔍 **Configuration Inspector**
+- **File System Scanning**: Automatic discovery of all PipeWire and WirePlumber configuration files
+- **Active Status Detection**: Identifies which configuration files are currently in use via pw-dump analysis
+- **User/System Separation**: Clear distinction between user-specific and system-wide configuration files
+- **File Metadata Display**: Shows file size, modification time, owner, and preview of configuration content
+- **Smart File Opening**: Desktop environment-aware terminal detection for editing system files
+- **Visual Indicators**: Checkmarks show which configuration files are currently active in PipeWire
+- **Refresh Capability**: On-demand rescanning of configuration files and active PipeWire state
 
 ### ⚡ **Advanced Tab Features**
 - **Configuration Modes**: Switch between Global System Settings and Exclusive Mode
@@ -84,6 +97,8 @@ As audio companies improve their Linux driver support and PipeWire continues to 
 ## Roadmap
 
 - [x] **Real-time Audio Monitoring** - Live level meters with PipeWire integration
+- [x] **Manual Monitoring Reconnection** - Recovery tools for audio monitoring
+- [x] **Configuration Inspector** - Comprehensive view of all audio configuration files
 - [x] Setting all available devices in one session
 - [x] Separate input/output configuration tabs
 - [x] User vs system-wide configuration scope
@@ -154,6 +169,25 @@ pro-audio-config
 - **Output Tab**: Configure playback devices (speakers, headphones, HDMI outputs)
 - **Input Tab**: Configure recording devices (microphones, audio interfaces, line inputs)
 
+### Configuration Inspector Tab
+The Configuration Inspector Tab provides comprehensive management of all audio configuration files:
+
+- **File Scanning**: Automatically scans for all PipeWire and WirePlumber configuration files
+- **Active Status**: Shows which configuration files are currently active with ✓ indicators
+- **User vs System**: Clearly distinguishes between user and system configuration files
+- **File Operations**: Double-click any file to open it with your default system editor
+- **Visual Preview**: Shows first lines of configuration content for quick identification
+- **Refresh Functionality**: Rescan configuration files and update active status
+
+### Real-time Monitoring Tab
+The Monitoring Tab provides live audio level monitoring with professional-grade features:
+
+- **Live Level Meters**: Real-time stereo channel monitoring with accurate dB readings
+- **Color-coded Zones**: Visual feedback with safe (green), warning (yellow), and clipping (red) indicators
+- **Manual Reconnection**: Recovery button for re-establishing monitoring when PipeWire services restart
+- **Service Health**: Automatic detection and recovery from PipeWire service interruptions
+- **Connection Verification**: Ensures monitor ports are properly connected to the application
+
 ### Advanced Tab
 The Advanced Tab provides professional-grade audio configuration options:
 
@@ -221,6 +255,18 @@ Each tab maintains independent settings, allowing you to optimize input and outp
 - Privilege Escalation: pkexec for secure root access
 - Multi-threaded UI: Non-blocking device detection and configuration
 
+### Configuration Inspector Implementation
+- **Active Status Detection**: Uses `pw-dump` JSON parsing to identify active configuration files
+- **File System Crawling**: Recursive scanning of standard PipeWire/WirePlumber directories
+- **Thread-safe Scanning**: Background scanning with main-thread UI updates
+- **Desktop Integration**: Smart terminal detection for editing system files across different desktop environments
+
+### Monitoring Reconnection System
+- **Service Health Monitoring**: Periodic checks of PipeWire service status
+- **Connection Recovery**: Automatic reconnection logic with exponential backoff
+- **PID Change Handling**: Detection and recovery from audio daemon PID changes
+- **Thread Lifecycle Management**: Proper cleanup and restart of monitoring threads
+
 ### Configuration Scope Implementation
 - **User Configuration**: Uses `~/.config/pipewire/pipewire.conf.d/` directory
 - **System Configuration**: Uses `/etc/pipewire/pipewire.conf.d/` directory
@@ -235,7 +281,6 @@ Each tab maintains independent settings, allowing you to optimize input and outp
 ### Configuration Approaches
 - **Primary**: PipeWire config fragments (highest priority)
 - **Fallback**: WirePlumber JSON configuration
-- **Legacy**: WirePlumber Lua configuration (versions < 0.5)
 - **Emergency**: Direct modification of main pipewire.conf
 
 
@@ -289,7 +334,7 @@ For support and questions:
 - Mint MATE 22.2 Zara (fully works)
 - Ubuntu MATE 24.04.03 LTS (fully works)
 - Pop!_OS 24.04 LTS Cosmic desktop (live monitor isn't showing activity due to Cosmic UI differency, but configs and info showing works)
-- Manjaro with Gnome 40 (fully works)
+- Manjaro with Gnome 49 (fully works)
 - EndeavourOS Ganymede with KDE Plasma 6.5 (fully works)
 
 **Note:** Since this works on more conservative Ubuntu LTS based systems, newer non LTS Ubuntu OSes will defintelly work...

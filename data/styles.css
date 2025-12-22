@@ -1,3 +1,6 @@
+/* data/styles.css - Pro Audio Config - Minimal Styles */
+
+/* ===== AUDIO METER STYLES ONLY ===== */
 .level-safe progressbar trough,
 .level-safe progressbar progress {
     background-color: #26A269; /* Green */
@@ -24,7 +27,7 @@ progressbar.clipping progress {
     100% { opacity: 1; }
 }
 
-/* NEW: Audio meter indicator styles */
+/* Audio meter indicator styles */
 .level-safe {
     background-color: #26A269; /* Green */
 }
@@ -35,6 +38,32 @@ progressbar.clipping progress {
 
 .level-danger {
     background-color: #C01C28; /* Red */
+}
+
+/* Config tree view styling */
+treeview {
+    font-family: Monospace, monospace;
+    font-size: 10pt;
+}
+
+treeview header button {
+    font-weight: bold;
+}
+
+/* Success/error message styling */
+.success-message {
+    color: #26a269;
+    font-weight: bold;
+}
+
+.error-message {
+    color: #c01c28;
+    font-weight: bold;
+}
+
+.info-message {
+    color: #1c71d8;
+    font-weight: bold;
 }
 
 /* Style for the small indicators in the key */

@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - User Interface Module
- * Version: 1.8
+ * Version: 1.9
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
@@ -31,7 +31,7 @@ use crate::config::{
     apply_advanced_audio_settings, apply_input_audio_settings_with_auth_blocking,
     apply_output_audio_settings_with_auth_blocking, apply_user_audio_settings,
 };
-
+use crate::config_inspector::ConfigInspectorTab;
 use crate::monitoring::MonitoringTab;
 
 #[derive(Clone)]
@@ -42,6 +42,7 @@ pub struct AudioApp {
     pub input_tab: AudioTab,
     pub advanced_tab: AdvancedTab,
     pub monitoring_tab: MonitoringTab,
+    pub config_inspector_tab: ConfigInspectorTab,
 }
 
 #[derive(Clone)]
@@ -61,7 +62,7 @@ pub struct AudioTab {
     pub preferences: Arc<Mutex<AppPreferences>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct AppPreferences {
     pub system_wide_config: bool,
 }
@@ -144,14 +145,6 @@ const CONFIG_MODES: &[(&str, &str)] = &[
     ("global", "Global System Settings (All Applications)"),
     ("exclusive", "Exclusive Mode (Single Application)"),
 ];
-
-impl Default for AppPreferences {
-    fn default() -> Self {
-        Self {
-            system_wide_config: false, // Default to user config
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub enum TabType {
@@ -278,6 +271,14 @@ impl AudioApp {
         let monitoring_label = Label::new(Some("Monitor"));
         notebook.append_page(&monitoring_tab.container, Some(&monitoring_label));
 
+        // Create config-inspector tab
+        let config_inspector_tab = ConfigInspectorTab::new();
+        let config_inspector_label = Label::new(Some("Config Inspector"));
+        notebook.append_page(
+            &config_inspector_tab.container,
+            Some(&config_inspector_label),
+        );
+
         main_box.pack_start(&notebook, true, true, 0);
         scrolled_window.add(&main_box);
         window.add(&scrolled_window);
@@ -289,6 +290,7 @@ impl AudioApp {
             input_tab,
             advanced_tab,
             monitoring_tab,
+            config_inspector_tab,
         };
 
         // ===== CONNECT SIGNALS =====
@@ -359,11 +361,19 @@ impl AudioApp {
         self.output_tab.detect_current_device();
         self.input_tab.detect_current_device();
         self.advanced_tab.detect_advanced_devices();
+        self.config_inspector_tab.scan_configs();
     }
 
     fn setup_signals(&self) {
         self.output_tab.setup_signals(self.clone());
         self.input_tab.setup_signals(self.clone());
+
+        let config_inspector_tab = self.config_inspector_tab.clone();
+        self.config_inspector_tab
+            .refresh_button
+            .connect_clicked(move |_| {
+                config_inspector_tab.scan_configs();
+            });
     }
 
     fn setup_advanced_signals(&self) {
@@ -377,10 +387,10 @@ impl AudioTab {
             directories::ProjectDirs::from("com", "proaudioconfig", "Pro Audio Config")
         {
             let prefs_path = prefs_dir.config_dir().join("preferences.toml");
-            if let Ok(content) = fs::read_to_string(&prefs_path) {
-                if let Ok(prefs) = toml::from_str(&content) {
-                    return prefs;
-                }
+            if let Ok(content) = fs::read_to_string(&prefs_path)
+                && let Ok(prefs) = toml::from_str(&content)
+            {
+                return prefs;
             }
         }
         AppPreferences::default()
@@ -814,7 +824,7 @@ impl AudioTab {
                                 .set_active_id(Some(&settings.buffer_size.to_string()));
                         }
                         Err(e) => {
-                            println!("Failed to detect current {} settings: {}", "audio", e);
+                            println!("Failed to detect current audio settings: {}", e);
                             // Set defaults if detection fails
                             sample_rate_combo.set_active_id(Some("48000"));
                             bit_depth_combo.set_active_id(Some("24"));
@@ -1073,6 +1083,12 @@ impl AudioTab {
         } else {
             Some(cleaned)
         }
+    }
+}
+
+impl Default for AdvancedTab {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1720,20 +1736,19 @@ impl AdvancedTab {
             let latency_label = latency_label.clone();
 
             exclusive_buffer_size_combo.connect_changed(move |combo| {
-                if let Some(buffer_size_str) = combo.active_id() {
-                    if let Some(sample_rate_str) = exclusive_sample_rate_combo.active_id() {
-                        if let (Ok(buffer_size), Ok(sample_rate)) = (
-                            buffer_size_str.parse::<u32>(),
-                            sample_rate_str.parse::<u32>(),
-                        ) {
-                            let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
-                            latency_label.set_text(&format!(
-                                "Calculated Latency: {:.2}ms @ {}kHz",
-                                latency_ms,
-                                sample_rate / 1000
-                            ));
-                        }
-                    }
+                if let Some(buffer_size_str) = combo.active_id()
+                    && let Some(sample_rate_str) = exclusive_sample_rate_combo.active_id()
+                    && let (Ok(buffer_size), Ok(sample_rate)) = (
+                        buffer_size_str.parse::<u32>(),
+                        sample_rate_str.parse::<u32>(),
+                    )
+                {
+                    let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
+                    latency_label.set_text(&format!(
+                        "Calculated Latency: {:.2}ms @ {}kHz",
+                        latency_ms,
+                        sample_rate / 1000
+                    ));
                 }
             });
         }
@@ -1744,20 +1759,19 @@ impl AdvancedTab {
             let latency_label = latency_label.clone();
 
             exclusive_sample_rate_combo.connect_changed(move |combo| {
-                if let Some(sample_rate_str) = combo.active_id() {
-                    if let Some(buffer_size_str) = exclusive_buffer_size_combo.active_id() {
-                        if let (Ok(buffer_size), Ok(sample_rate)) = (
-                            buffer_size_str.parse::<u32>(),
-                            sample_rate_str.parse::<u32>(),
-                        ) {
-                            let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
-                            latency_label.set_text(&format!(
-                                "Calculated Latency: {:.2}ms @ {}kHz",
-                                latency_ms,
-                                sample_rate / 1000
-                            ));
-                        }
-                    }
+                if let Some(sample_rate_str) = combo.active_id()
+                    && let Some(buffer_size_str) = exclusive_buffer_size_combo.active_id()
+                    && let (Ok(buffer_size), Ok(sample_rate)) = (
+                        buffer_size_str.parse::<u32>(),
+                        sample_rate_str.parse::<u32>(),
+                    )
+                {
+                    let latency_ms = (buffer_size as f64 * 1000.0) / sample_rate as f64;
+                    latency_label.set_text(&format!(
+                        "Calculated Latency: {:.2}ms @ {}kHz",
+                        latency_ms,
+                        sample_rate / 1000
+                    ));
                 }
             });
         }
@@ -2180,7 +2194,7 @@ pub fn show_about_dialog() {
 
     dialog.set_title("About Pro Audio Config");
     dialog.set_program_name("Pro Audio Config");
-    dialog.set_version(Some("1.8"));
+    dialog.set_version(Some("1.9"));
     dialog.set_website(Some("https://github.com/Peter-L-SVK/pro_audio_config"));
     dialog.set_copyright(Some("Copyright © 2025 Peter Leukanič"));
     dialog.set_authors(&["Peter Leukanič"]);
@@ -2241,10 +2255,10 @@ pub fn show_about_dialog() {
 fn get_main_window() -> gtk::Window {
     // Try to find the application's main window from toplevel widgets
     for widget in gtk::Window::list_toplevels() {
-        if let Some(window) = widget.downcast_ref::<gtk::Window>() {
-            if window.is_visible() {
-                return window.clone();
-            }
+        if let Some(window) = widget.downcast_ref::<gtk::Window>()
+            && window.is_visible()
+        {
+            return window.clone();
         }
     }
 

@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Monitoring Module
- * Version: 1.8
+ * Version: 1.9
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  *
@@ -13,7 +13,7 @@ use crate::audio::{
 };
 use glib::ControlFlow;
 use gtk::prelude::*;
-use gtk::{Box as GtkBox, Frame, Label, Orientation, ProgressBar, Separator};
+use gtk::{Box as GtkBox, Button, Frame, Label, Orientation, ProgressBar, Separator};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -42,7 +42,13 @@ enum MonitorMessage {
         right_level: f64,
         right_db: String,
     },
-    Error(String), // Add error message type
+    Error(String),
+    RestartRequest,
+    // Update button state (called from main thread)
+    UpdateButton {
+        sensitive: bool,
+        label: String,
+    },
 }
 
 #[derive(Clone)]
@@ -57,8 +63,137 @@ pub struct MonitoringTab {
     left_channel_meter: ProgressBar,
     right_channel_meter: ProgressBar,
     system_info_label: Label,
+    reconnect_button: Button,
     update_thread_running: Arc<Mutex<bool>>,
     sender: mpsc::Sender<MonitorMessage>,
+}
+
+fn manual_pw_link_connection() -> Result<(), String> {
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    println!("MANUAL: Listing all monitor ports...");
+
+    // First, list all monitor ports
+    let output = Command::new("pw-link")
+        .args(["--output"])
+        .output()
+        .map_err(|e| format!("pw-link failed: {}", e))?;
+
+    if !output.status.success() {
+        return Err("pw-link command failed".to_string());
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let mut monitor_ports = Vec::new();
+
+    for line in output_str.lines() {
+        if line.contains("monitor_") && !line.contains("pro_audio_config") {
+            monitor_ports.push(line.trim().to_string());
+            println!("MANUAL: Found monitor port: {}", line.trim());
+        }
+    }
+
+    if monitor_ports.is_empty() {
+        return Err("No monitor ports found. Is audio playing?".to_string());
+    }
+
+    // Get your app's input ports
+    let input_output = Command::new("pw-link")
+        .args(["--input"])
+        .output()
+        .map_err(|e| format!("pw-link --input failed: {}", e))?;
+
+    let input_str = String::from_utf8_lossy(&input_output.stdout);
+    let mut input_ports = Vec::new();
+
+    for line in input_str.lines() {
+        if line.contains("pro_audio_config:input_") {
+            input_ports.push(line.trim().to_string());
+            println!("MANUAL: Found input port: {}", line.trim());
+        }
+    }
+
+    if input_ports.is_empty() {
+        return Err("No pro_audio_config input ports found. Is the app running?".to_string());
+    }
+
+    // Try to connect matching channels
+    let mut connected = 0;
+    let mut errors = Vec::new();
+
+    for monitor_port in &monitor_ports {
+        // Extract channel name
+        if let Some(colon_pos) = monitor_port.rfind(':') {
+            let channel_name = &monitor_port[colon_pos + 1..]; // e.g., "monitor_FL"
+            let simple_channel = channel_name.replace("monitor_", "");
+
+            // Find matching input port
+            let target_port = format!("pro_audio_config:input_{}", simple_channel);
+
+            if input_ports.iter().any(|p| p == &target_port) {
+                println!("MANUAL: Connecting {} -> {}", monitor_port, target_port);
+
+                for attempt in 1..=3 {
+                    match Command::new("pw-link")
+                        .args([monitor_port, &target_port])
+                        .status()
+                    {
+                        Ok(status) if status.success() => {
+                            println!("MANUAL: ✓ Connected {} channel", simple_channel);
+                            connected += 1;
+                            thread::sleep(Duration::from_millis(100));
+                            break;
+                        }
+                        Ok(_) if attempt < 3 => {
+                            println!("MANUAL: Retry {}...", attempt);
+                            thread::sleep(Duration::from_millis(300));
+                        }
+                        Err(e) if attempt < 3 => {
+                            println!("MANUAL: Error: {}, retrying...", e);
+                            thread::sleep(Duration::from_millis(300));
+                        }
+                        _ => {
+                            errors.push(format!("Failed to connect {}", simple_channel));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if connected > 0 {
+        println!("MANUAL: Successfully connected {} channels", connected);
+
+        // Verify connections
+        thread::sleep(Duration::from_millis(500));
+
+        if let Ok(verify) = Command::new("pw-link").args(["--links"]).output() {
+            let verify_str = String::from_utf8_lossy(&verify.stdout);
+            let links = verify_str
+                .lines()
+                .filter(|line| line.contains("pro_audio_config"))
+                .count();
+            println!("MANUAL: Verified {} active connections", links);
+        }
+
+        Ok(())
+    } else {
+        let all_errors = if errors.is_empty() {
+            "No matching channels found".to_string()
+        } else {
+            errors.join(", ")
+        };
+
+        Err(format!("Failed to connect any channels: {}", all_errors))
+    }
+}
+
+impl Default for MonitoringTab {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MonitoringTab {
@@ -201,11 +336,27 @@ impl MonitoringTab {
         meter_box.pack_start(&Separator::new(Orientation::Horizontal), false, false, 12);
         meter_box.pack_start(&level_key_box, false, false, 0);
 
+        // ===== RECONNECT BUTTON SECTION =====
+        let (button_frame, button_box) = create_section_box("Manual Connection");
+
+        let reconnect_button = Button::with_label("Re-connect Monitor");
+        reconnect_button.set_tooltip_text(Some("Manually reconnect audio monitoring to PipeWire"));
+
+        let button_info_label = Label::new(Some(
+            "If monitoring stops working, use this button to manually reconnect to PipeWire audio output.",
+        ));
+        button_info_label.set_line_wrap(true);
+        button_info_label.set_halign(gtk::Align::Start);
+
+        button_box.pack_start(&reconnect_button, false, false, 0);
+        button_box.pack_start(&button_info_label, false, false, 0);
+
         // ===== ASSEMBLE TAB =====
         container.pack_start(&status_frame, false, false, 0);
         container.pack_start(&config_frame, false, false, 0);
         container.pack_start(&device_frame, false, false, 0);
         container.pack_start(&meter_frame, false, false, 0);
+        container.pack_start(&button_frame, false, false, 0);
 
         // Create channel for thread communication
         let (sender, receiver) = mpsc::channel();
@@ -221,9 +372,16 @@ impl MonitoringTab {
             left_channel_meter,
             right_channel_meter,
             system_info_label,
+            reconnect_button,
             update_thread_running: Arc::new(Mutex::new(false)),
             sender,
         };
+
+        // Set up button click handler
+        let tab_for_button = tab.clone();
+        tab.reconnect_button.connect_clicked(move |_| {
+            tab_for_button.manual_reconnect();
+        });
 
         // Set up receiver in the main thread
         let tab_clone = tab.clone();
@@ -303,7 +461,29 @@ impl MonitoringTab {
     fn handle_message(&self, message: MonitorMessage) {
         match message {
             MonitorMessage::Status(text) => {
-                self.status_label.set_text(&text);
+                if text.starts_with("BUTTON_RESET") {
+                    self.reconnect_button.set_sensitive(true);
+                    self.reconnect_button.set_label("Re-connect Monitor");
+
+                    // If it's an error, also show dialog
+                    if text.starts_with("BUTTON_RESET_ERROR:") {
+                        let error_msg = text.trim_start_matches("BUTTON_RESET_ERROR:");
+                        let dialog = gtk::MessageDialog::new(
+                            None::<&gtk::Window>,
+                            gtk::DialogFlags::MODAL,
+                            gtk::MessageType::Error,
+                            gtk::ButtonsType::Close,
+                            &format!("Failed to reconnect to PipeWire:\n\n{}", error_msg),
+                        );
+                        dialog.run();
+                        // SAFETY: Destroying a dialog after it has been run is safe
+                        unsafe {
+                            dialog.destroy();
+                        }
+                    }
+                } else {
+                    self.status_label.set_text(&text);
+                }
             }
             MonitorMessage::Config {
                 sample_rate,
@@ -350,11 +530,12 @@ impl MonitoringTab {
                 self.left_channel_meter.set_text(Some(&left_db));
 
                 // Apply CSS classes based on level - CORRECTED THRESHOLDS
+                // NOTE: CSS has .level-safe, .level-warning, .level-danger classes
                 let left_context = self.left_channel_meter.style_context();
                 left_context.remove_class("level-safe");
                 left_context.remove_class("level-warning");
                 left_context.remove_class("level-danger");
-                left_context.remove_class("clipping");
+                left_context.remove_class("clipping"); // This class is in CSS with animation
 
                 // Correct thresholds that match your labels
                 if left_level < 0.95 {
@@ -366,7 +547,7 @@ impl MonitoringTab {
                 } else {
                     // Danger: ≥ -0.6 dB (approaching clipping)
                     left_context.add_class("level-danger");
-                    left_context.add_class("clipping");
+                    left_context.add_class("clipping"); // Add blinking effect for clipping
                 }
 
                 // Update right channel meter (same logic)
@@ -388,13 +569,180 @@ impl MonitoringTab {
                     right_context.add_class("clipping");
                 }
             }
-
             MonitorMessage::Error(err) => {
-                // Update status to show error
+                // Normal error handling
                 self.status_label.set_text(&format!("Error: {}", err));
                 eprintln!("Monitoring error: {}", err);
+
+                // Also re-enable the button if it was disabled
+                self.reconnect_button.set_sensitive(true);
+                self.reconnect_button.set_label("Re-connect Monitor");
+            }
+            MonitorMessage::RestartRequest => {
+                // We're already on the main thread (handle_message is called from GLib timeout)
+                // So we can safely call restart_monitoring directly
+                self.restart_monitoring();
+            }
+            MonitorMessage::UpdateButton { sensitive, label } => {
+                // Update button state
+                self.reconnect_button.set_sensitive(sensitive);
+                self.reconnect_button.set_label(&label);
             }
         }
+    }
+
+    pub fn manual_reconnect(&self) {
+        // Update UI on the main thread (we're already on main thread here)
+        self.status_label.set_text("Restarting audio monitoring...");
+        self.reconnect_button.set_sensitive(false);
+        self.reconnect_button.set_label("Restarting...");
+
+        // Send a status update
+        let _ = self.sender.send(MonitorMessage::Status(
+            "Preparing to restart monitoring...".to_string(),
+        ));
+
+        // Clone only thread-safe data
+        let sender = self.sender.clone();
+
+        // Spawn a thread for the potentially blocking operations
+        thread::spawn(move || {
+            // Give UI time to update
+            thread::sleep(Duration::from_millis(100));
+
+            // Try manual connection first
+            match manual_pw_link_connection() {
+                Ok(_) => {
+                    println!("INFO: Manual connection successful");
+                    let _ = sender.send(MonitorMessage::Status(
+                        "✓ Manual connection established".to_string(),
+                    ));
+
+                    // Still request a restart to ensure everything is fresh
+                    thread::sleep(Duration::from_millis(500));
+                    let _ = sender.send(MonitorMessage::RestartRequest);
+                }
+                Err(e) => {
+                    println!("WARN: Manual connection failed: {}", e);
+
+                    // Send error message
+                    let _ = sender.send(MonitorMessage::Error(format!(
+                        "Manual connection failed: {}. Attempting auto-restart...",
+                        e
+                    )));
+
+                    // Still try to restart
+                    thread::sleep(Duration::from_millis(500));
+                    let _ = sender.send(MonitorMessage::RestartRequest);
+                }
+            }
+
+            // Re-enable the button after a delay
+            thread::sleep(Duration::from_millis(2000));
+            let _ = sender.send(MonitorMessage::UpdateButton {
+                sensitive: true,
+                label: "Re-connect Monitor".to_string(),
+            });
+        });
+    }
+
+    pub fn restart_monitoring(&self) {
+        println!("INFO: Restarting entire monitoring system...");
+
+        // First, stop current monitoring
+        self.stop_monitoring();
+
+        // Wait a bit
+        thread::sleep(Duration::from_millis(1000));
+
+        // Clear any cached audio data
+        crate::audio::clear_cache();
+
+        // Clean up existing PipeWire connections
+        self.cleanup_pipewire_connections();
+
+        // Wait for cleanup
+        thread::sleep(Duration::from_millis(500));
+
+        // Restart monitoring
+        self.start_monitoring();
+
+        // Wait for monitor to initialize
+        thread::sleep(Duration::from_millis(2000));
+
+        // Try to auto-connect
+        self.auto_connect_with_retry();
+    }
+
+    fn cleanup_pipewire_connections(&self) {
+        use std::process::Command;
+
+        println!("INFO: Cleaning up PipeWire connections...");
+
+        // Method 1: Disconnect all monitor connections
+        if let Ok(output) = Command::new("pw-link").args(["--links"]).output() {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+
+            for line in output_str.lines() {
+                if line.contains("monitor_")
+                    && line.contains("pro_audio_config")
+                    && let Some(connection_id) = line.split_whitespace().next()
+                {
+                    println!("INFO: Disconnecting: {}", connection_id);
+                    let _ = Command::new("pw-link").args(["-d", connection_id]).status();
+                }
+            }
+        }
+
+        // Method 2: Use pattern matching
+        let _ = Command::new("pw-link")
+            .args(["-d", "-I", "pro_audio_config:input_*"])
+            .status();
+
+        // Method 3: Kill any pipewire-monitor related processes
+        let _ = Command::new("pkill")
+            .arg("-f")
+            .arg("pipewire-monitor")
+            .status();
+    }
+
+    fn auto_connect_with_retry(&self) {
+        let sender = self.sender.clone();
+
+        thread::spawn(move || {
+            println!("INFO: Starting auto-connect with retry...");
+
+            for attempt in 1..=5 {
+                println!("INFO: Auto-connect attempt {}/5", attempt);
+
+                match crate::audio_capture::auto_connect_monitor_delayed() {
+                    Ok(_) => {
+                        println!("INFO: Auto-connect successful on attempt {}", attempt);
+                        let _ = sender.send(MonitorMessage::Status(format!(
+                            "✓ Connected on attempt {}",
+                            attempt
+                        )));
+                        return;
+                    }
+                    Err(e) => {
+                        println!("WARN: Attempt {} failed: {}", attempt, e);
+
+                        if attempt < 5 {
+                            let _ = sender.send(MonitorMessage::Status(format!(
+                                "Retrying connection... ({}/5)",
+                                attempt + 1
+                            )));
+                            thread::sleep(Duration::from_secs(2)); // Wait longer between retries
+                        } else {
+                            let _ = sender.send(MonitorMessage::Error(format!(
+                                "Failed to auto-connect after {} attempts: {}",
+                                attempt, e
+                            )));
+                        }
+                    }
+                }
+            }
+        });
     }
 
     pub fn start_monitoring(&self) {
