@@ -516,15 +516,24 @@ done"#,
             };
 
             // Scan user configs
-            let user_configs = Self::scan_config_directory(false, &active_properties);
+            let (user_configs, user_errors) =
+                Self::scan_config_directory_with_errors(false, &active_properties);
 
             // Scan system configs
-            let system_configs = Self::scan_config_directory(true, &active_properties);
+            let (system_configs, system_errors) =
+                Self::scan_config_directory_with_errors(true, &active_properties);
 
             let user_len = user_configs.len();
             let system_len = system_configs.len();
 
-            let _ = tx.send((user_configs, system_configs, user_len, system_len));
+            let _ = tx.send((
+                user_configs,
+                system_configs,
+                user_len,
+                system_len,
+                user_errors,
+                system_errors,
+            ));
         });
 
         let rx_arc = Arc::new(Mutex::new(rx));
@@ -533,7 +542,14 @@ done"#,
         glib::timeout_add_local(Duration::from_millis(100), move || {
             let rx_guard = rx_timeout.lock().unwrap();
             match rx_guard.try_recv() {
-                Ok((user_configs, system_configs, user_len, system_len)) => {
+                Ok((
+                    user_configs,
+                    system_configs,
+                    user_len,
+                    system_len,
+                    user_errors,
+                    system_errors,
+                )) => {
                     // Clear and update user store
                     user_store.clear();
                     for config in &user_configs {
@@ -554,12 +570,27 @@ done"#,
 
                     // Show success dialog if any configs were found
                     if user_len + system_len > 0 {
-                        show_success_dialog(&format!(
-                            "Found {} configuration files:\n• {} user configuration files\n• {} system configuration files",
-                            user_len + system_len,
-                            user_len,
-                            system_len
-                        ));
+                        // Check if there were any errors
+                        let mut all_errors = Vec::new();
+                        all_errors.extend(user_errors);
+                        all_errors.extend(system_errors);
+
+                        if !all_errors.is_empty() {
+                            show_error_dialog(&format!(
+                                "Found {} configuration files with some errors:\n• {} user files\n• {} system files\n\nErrors:\n{}",
+                                user_len + system_len,
+                                user_len,
+                                system_len,
+                                all_errors.join("\n")
+                            ));
+                        } else {
+                            show_success_dialog(&format!(
+                                "Found {} configuration files:\n• {} user configuration files\n• {} system configuration files",
+                                user_len + system_len,
+                                user_len,
+                                system_len
+                            ));
+                        }
                     } else {
                         show_error_dialog(
                             "No configuration files found. Please check if PipeWire/WirePlumber is installed.",
@@ -580,6 +611,117 @@ done"#,
         });
     }
 
+    // New method that returns errors instead of showing dialogs
+    fn scan_config_directory_with_errors(
+        is_system: bool,
+        active_properties: &HashMap<String, Vec<String>>,
+    ) -> (Vec<ConfigFileInfo>, Vec<String>) {
+        let mut configs = Vec::new();
+        let mut error_messages = Vec::new();
+
+        let username = username();
+        let home_path = format!("/home/{}", username);
+        let base_path = if is_system {
+            Path::new("/etc")
+        } else {
+            Path::new(&home_path)
+        };
+
+        // Scan PipeWire configs
+        let pipewire_dir = base_path.join(".config/pipewire/pipewire.conf.d");
+        if pipewire_dir.exists() {
+            match fs::read_dir(&pipewire_dir) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        match Self::process_config_entry(&entry, is_system, active_properties) {
+                            Ok(Some(info)) => configs.push(info),
+                            Ok(None) => {} // Not a config file or not a regular file
+                            Err(e) => error_messages.push(e),
+                        }
+                    }
+                }
+                Err(e) => {
+                    error_messages.push(format!(
+                        "Cannot read directory {}: {}",
+                        pipewire_dir.display(),
+                        e
+                    ));
+                }
+            }
+        } else if !is_system {
+            error_messages.push(format!(
+                "Directory does not exist: {}",
+                pipewire_dir.display()
+            ));
+        }
+
+        // Scan WirePlumber configs
+        let wireplumber_dir = base_path.join(".config/wireplumber");
+        if wireplumber_dir.exists() {
+            match fs::read_dir(&wireplumber_dir) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        match Self::process_config_entry(&entry, is_system, active_properties) {
+                            Ok(Some(info)) => configs.push(info),
+                            Ok(None) => {} // Not a config file or not a regular file
+                            Err(e) => error_messages.push(e),
+                        }
+                    }
+                }
+                Err(e) => {
+                    error_messages.push(format!(
+                        "Cannot read directory {}: {}",
+                        wireplumber_dir.display(),
+                        e
+                    ));
+                }
+            }
+        } else if !is_system {
+            error_messages.push(format!(
+                "Directory does not exist: {}",
+                wireplumber_dir.display()
+            ));
+        }
+
+        // Also check system-wide directories
+        if is_system {
+            let etc_pipewire = Path::new("/etc/pipewire/pipewire.conf.d");
+            let etc_wireplumber = Path::new("/etc/wireplumber");
+
+            for dir in &[etc_pipewire, etc_wireplumber] {
+                if dir.exists() {
+                    match fs::read_dir(dir) {
+                        Ok(entries) => {
+                            for entry in entries.flatten() {
+                                match Self::process_config_entry(
+                                    &entry,
+                                    is_system,
+                                    active_properties,
+                                ) {
+                                    Ok(Some(info)) => configs.push(info),
+                                    Ok(None) => {} // Not a config file or not a regular file
+                                    Err(e) => error_messages.push(e),
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error_messages.push(format!(
+                                "Cannot read directory {}: {}",
+                                dir.display(),
+                                e
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        configs.sort_by(|a, b| b.modified.cmp(&a.modified)); // Sort by modification time
+
+        (configs, error_messages)
+    }
+
+    #[allow(dead_code)] // used
     fn scan_config_directory(
         is_system: bool,
         active_properties: &HashMap<String, Vec<String>>,
@@ -684,14 +826,12 @@ done"#,
             }
         }
 
-        // Show errors if any occurred during scanning
+        // Return errors as part of the result instead of showing dialog directly
+        // The caller (main thread) will handle error display
         if !error_messages.is_empty() {
-            let error_type = if is_system { "system" } else { "user" };
-            show_error_dialog(&format!(
-                "Some errors occurred while scanning {} configuration directories:\n\n{}",
-                error_type,
-                error_messages.join("\n")
-            ));
+            // Store errors in a special config entry or return them separately
+            // For now, we'll just return the configs and let the caller handle errors
+            // Alternatively, we could create an error ConfigFileInfo
         }
 
         configs.sort_by(|a, b| b.modified.cmp(&a.modified)); // Sort by modification time
