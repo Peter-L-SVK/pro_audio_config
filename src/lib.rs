@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Library
- * Version: 1.8
+ * Version: 1.9
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
@@ -11,6 +11,7 @@
 pub mod audio;
 pub mod audio_capture;
 pub mod config;
+pub mod config_inspector;
 pub mod monitoring;
 pub mod ui;
 pub mod utils;

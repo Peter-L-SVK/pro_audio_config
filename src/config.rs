@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Configuration Module
- * Version: 1.8
+ * Version: 1.9
  * Copyright (c) 2025 Peter Leukanič
  * Under MIT License
  *
@@ -350,11 +350,11 @@ pub fn restore_standard_audio_mode() -> Result<(), String> {
 
     let mut removed_count = 0;
     for config_file in &config_files {
-        if Path::new(config_file).exists() {
-            if let Ok(()) = fs::remove_file(config_file) {
-                println!("✓ Removed exclusive config: {}", config_file);
-                removed_count += 1;
-            }
+        if Path::new(config_file).exists()
+            && let Ok(()) = fs::remove_file(config_file)
+        {
+            println!("✓ Removed exclusive config: {}", config_file);
+            removed_count += 1;
         }
     }
 
@@ -609,10 +609,10 @@ context.modules = [
 
         // Skip backup for system directories to avoid permission issues
         // The backup is just a safety measure, not critical
-        if !dir.starts_with("/etc/") {
-            if let Err(e) = backup_current_config(&dir) {
-                println!("Note: Could not backup config (non-fatal): {}", e);
-            }
+        if !dir.starts_with("/etc/")
+            && let Err(e) = backup_current_config(dir)
+        {
+            println!("Note: Could not backup config (non-fatal): {}", e);
         }
 
         // Write file with proper privilege handling
@@ -650,7 +650,7 @@ fn create_wireplumber_config_new(
 
     for dir in &config_dirs {
         // Create directory if it doesn't exist
-        create_dir_all_with_privileges(&dir)?;
+        create_dir_all_with_privileges(dir)?;
 
         let config_path = format!("{}/99-pro-audio.conf", dir);
 
@@ -757,7 +757,7 @@ fn create_wireplumber_device_config(
         let config_path = format!("{}/99-pro-audio-devices.conf", dir);
 
         // Create directory if needed
-        if let Err(e) = create_dir_all_with_privileges(&dir) {
+        if let Err(e) = create_dir_all_with_privileges(dir) {
             println!(
                 "Note: Could not create WirePlumber directory {}: {}",
                 dir, e
@@ -1316,11 +1316,11 @@ fn cleanup_audio_configs(system_wide: bool, config_type: &str, mode: &str) -> Re
             }
         } else {
             // Direct file path
-            if Path::new(&pattern).exists() {
-                if let Ok(()) = fs::remove_file(&pattern) {
-                    println!("✓ Removed: {}", pattern);
-                    removed_count += 1;
-                }
+            if Path::new(&pattern).exists()
+                && let Ok(()) = fs::remove_file(&pattern)
+            {
+                println!("✓ Removed: {}", pattern);
+                removed_count += 1;
             }
         }
     }
@@ -1848,11 +1848,11 @@ fn check_if_services_are_running() -> bool {
 
     // Check if any of the services are running
     for service in &services {
-        if let Ok(output) = Command::new("pgrep").arg("-f").arg(service).output() {
-            if output.status.success() {
-                // At least one service is running
-                return true;
-            }
+        if let Ok(output) = Command::new("pgrep").arg("-f").arg(service).output()
+            && output.status.success()
+        {
+            // At least one service is running
+            return true;
         }
     }
 
@@ -1860,10 +1860,9 @@ fn check_if_services_are_running() -> bool {
     if let Ok(output) = Command::new("systemctl")
         .args(["--user", "is-active", "pipewire"])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            return true;
-        }
+        return true;
     }
 
     false
@@ -1875,16 +1874,16 @@ fn force_pipewire_reload() -> Result<(), String> {
     println!("Forcing PipeWire to reload configuration...");
 
     // Method 1: Send SIGHUP to pipewire daemon
-    if let Ok(output) = Command::new("pgrep").arg("pipewire").output() {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let pid_str = stdout.trim();
-            if !pid_str.is_empty() {
-                // Store the PID in a variable to avoid temporary value issues
-                let pid = pid_str.to_string();
-                let _ = Command::new("kill").args(["-HUP", &pid]).status();
-                println!("✓ Sent SIGHUP to PipeWire (PID: {})", pid);
-            }
+    if let Ok(output) = Command::new("pgrep").arg("pipewire").output()
+        && output.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let pid_str = stdout.trim();
+        if !pid_str.is_empty() {
+            // Store the PID in a variable to avoid temporary value issues
+            let pid = pid_str.to_string();
+            let _ = Command::new("kill").args(["-HUP", &pid]).status();
+            println!("✓ Sent SIGHUP to PipeWire (PID: {})", pid);
         }
     }
 
@@ -2009,7 +2008,7 @@ fn restart_audio_services(use_legacy: bool, system_wide: bool) -> Result<(), Str
         std::thread::sleep(check_interval);
         elapsed += check_interval;
 
-        if elapsed.as_secs() % 2 == 0 {
+        if elapsed.as_secs().is_multiple_of(2) {
             println!(
                 "Waiting for audio services... ({:.1}s)",
                 elapsed.as_secs_f32()
@@ -2087,11 +2086,12 @@ fn backup_audio_settings() -> Result<(), String> {
             if let Ok(entries) = fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.is_file() && path.extension().map_or(false, |ext| ext == "conf") {
-                        if let Some(filename) = path.file_name() {
-                            let dest = format!("{}/{}", backup_subdir, filename.to_string_lossy());
-                            let _ = fs::copy(&path, &dest);
-                        }
+                    if path.is_file()
+                        && path.extension().is_some_and(|ext| ext == "conf")
+                        && let Some(filename) = path.file_name()
+                    {
+                        let dest = format!("{}/{}", backup_subdir, filename.to_string_lossy());
+                        let _ = fs::copy(&path, &dest);
                     }
                 }
             }
@@ -2122,16 +2122,16 @@ fn backup_current_config(config_dir: &str) -> Result<(), String> {
     create_dir_all_with_privileges(&backup_dir)?;
 
     // Copy existing configs to backup
-    if Path::new(config_dir).exists() {
-        if let Ok(entries) = fs::read_dir(config_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() && path.extension().map_or(false, |ext| ext == "conf") {
-                    let filename = path.file_name().unwrap_or_default();
-                    let backup_path = format!("{}/{}", backup_dir, filename.to_string_lossy());
-                    if let Err(e) = fs::copy(&path, &backup_path) {
-                        println!("Warning: Failed to backup {:?}: {}", path, e);
-                    }
+    if Path::new(config_dir).exists()
+        && let Ok(entries) = fs::read_dir(config_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "conf") {
+                let filename = path.file_name().unwrap_or_default();
+                let backup_path = format!("{}/{}", backup_dir, filename.to_string_lossy());
+                if let Err(e) = fs::copy(&path, &backup_path) {
+                    println!("Warning: Failed to backup {:?}: {}", path, e);
                 }
             }
         }
@@ -2184,10 +2184,11 @@ fn verify_advanced_settings_applied(
             if let Some(value) = extract_number_from_line(trimmed) {
                 current_rate = Some(value);
             }
-        } else if trimmed.starts_with('*') && trimmed.contains("default.clock.quantum") {
-            if let Some(value) = extract_number_from_line(trimmed) {
-                current_quantum = Some(value);
-            }
+        } else if trimmed.starts_with('*')
+            && trimmed.contains("default.clock.quantum")
+            && let Some(value) = extract_number_from_line(trimmed)
+        {
+            current_quantum = Some(value);
         }
     }
 
@@ -2244,7 +2245,7 @@ fn verify_advanced_settings_applied(
         let mut configs = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "conf") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "conf") {
                 let filename = path
                     .file_name()
                     .unwrap_or_default()
@@ -2273,7 +2274,7 @@ fn verify_advanced_settings_applied(
                 .filter(|entry| {
                     let path = entry.path();
                     path.is_file()
-                        && path.extension().map_or(false, |ext| ext == "conf")
+                        && path.extension().is_some_and(|ext| ext == "conf")
                         && path
                             .file_name()
                             .unwrap_or_default()
