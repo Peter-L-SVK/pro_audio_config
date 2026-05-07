@@ -1,7 +1,7 @@
 /*
  * Pro Audio Config - Monitoring Module
- * Version: 1.9
- * Copyright (c) 2025 Peter Leukanič
+ * Version: 2.0
+ * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  *
  * Real-time audio monitoring and configuration display
@@ -1003,9 +1003,7 @@ mod tests {
     #[test]
     #[ignore = "Requires audio system - run locally only"]
     fn test_monitoring_tab_integration() {
-        if !init_gtk() {
-            return;
-        }
+        if !init_gtk() {}
         // ... integration test code
     }
 }

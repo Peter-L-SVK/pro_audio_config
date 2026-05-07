@@ -4,7 +4,6 @@
 use pro_audio_config::audio::{AudioDevice, AudioSettings, DeviceType};
 use pro_audio_config::ui::{show_error_dialog, show_success_dialog};
 
-// Test the device grouping and categorization logic
 #[test]
 fn test_device_grouping_categorization() {
     // Test the device categorization logic used in the UI for grouping
@@ -230,20 +229,20 @@ fn test_dialog_function_safety() {
 #[test]
 fn test_ui_combo_box_simulation() {
     // Simulate the combo box data structures used in the UI
-    let sample_rates = vec![
+    let sample_rates = [
         (44100, "44.1 kHz - CD Quality"),
         (48000, "48 kHz - Standard Audio"),
         (96000, "96 kHz - High Resolution"),
         (192000, "192 kHz - Studio Quality"),
     ];
 
-    let bit_depths = vec![
+    let bit_depths = [
         (16, "16 bit - CD Quality"),
         (24, "24 bit - High Resolution"),
         (32, "32 bit - Studio Quality"),
     ];
 
-    let buffer_sizes = vec![
+    let buffer_sizes = [
         (128, "128 samples (2.7ms @48kHz)"),
         (256, "256 samples (5.3ms @48kHz)"),
         (512, "512 samples (10.7ms @48kHz)"),
@@ -407,4 +406,22 @@ fn test_error_handling_patterns() {
             assert!(!error_display.is_empty());
         }
     }
+}
+
+#[test]
+fn test_ui_constants_consistency() {
+    // Test that all constant arrays are non-empty and have valid data
+    // These come from ui/constants.rs via re-exports
+    use pro_audio_config::ui::constants::*;
+
+    assert!(!SAMPLE_RATES.is_empty());
+    assert!(!BIT_DEPTHS.is_empty());
+    assert!(!BUFFER_SIZES.is_empty());
+    assert!(!EXCLUSIVE_BUFFER_SIZES.is_empty());
+    assert!(!CONFIG_MODES.is_empty());
+
+    // Verify expected defaults exist
+    assert!(SAMPLE_RATES.iter().any(|(rate, _)| *rate == 48000));
+    assert!(BIT_DEPTHS.iter().any(|(depth, _)| *depth == 24));
+    assert!(BUFFER_SIZES.iter().any(|(size, _)| *size == 512));
 }

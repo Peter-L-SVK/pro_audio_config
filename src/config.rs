@@ -1,7 +1,7 @@
 /*
  * Pro Audio Config - Configuration Module
- * Version: 1.9
- * Copyright (c) 2025 Peter Leukanič
+ * Version: 2.0
+ * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  *
  * Handles audio configuration for PipeWire and WirePlumber with authentication
@@ -150,7 +150,7 @@ pub fn apply_output_audio_settings_with_auth_blocking(
 /// Apply audio settings for user-specific configuration
 pub fn apply_user_audio_settings(settings: AudioSettings, tab_type: &str) -> Result<(), String> {
     println!("Applying user-specific {} audio settings", tab_type);
-    update_audio_settings(&settings, false) // false = not system-wide
+    update_audio_settings(&settings, false, None) // false = not system-wide
 }
 
 /// Checks if audio services are running
@@ -636,6 +636,7 @@ context.modules = [
 fn create_wireplumber_config_new(
     settings: &AudioSettings,
     system_wide: bool,
+    actual_device_name: Option<&str>,
 ) -> Result<(), String> {
     let username = whoami::username();
 
@@ -646,6 +647,15 @@ fn create_wireplumber_config_new(
             "/home/{}/.config/wireplumber/wireplumber.conf.d",
             username
         )]
+    };
+
+    // Get the actual device pattern
+    let device_pattern = if let Some(name) = actual_device_name {
+        name.to_string()
+    } else if settings.device_id == "default" {
+        "~alsa.*".to_string()
+    } else {
+        settings.device_id.clone()
     };
 
     for dir in &config_dirs {
@@ -660,7 +670,7 @@ fn create_wireplumber_config_new(
     {{
       "matches": [
         {{
-          "node.name": "~alsa.*"
+          "node.name": "{}"
         }}
       ],
       "actions": {{
@@ -673,9 +683,7 @@ fn create_wireplumber_config_new(
     }}
   ]
 }}"#,
-            settings.sample_rate,
-            settings.sample_rate, // Single allowed rate for simplicity
-            settings.buffer_size
+            device_pattern, settings.sample_rate, settings.sample_rate, settings.buffer_size
         );
 
         if let Err(e) = write_config_with_privileges(&config_path, &content) {
@@ -686,7 +694,10 @@ fn create_wireplumber_config_new(
             continue;
         }
 
-        println!("✓ Created WirePlumber config: {}", config_path);
+        println!(
+            "✓ Created WirePlumber config: {} for device: {}",
+            config_path, device_pattern
+        );
         return Ok(());
     }
 
@@ -1522,7 +1533,7 @@ fn apply_audio_settings_with_auth(
     );
 
     // Try PipeWire configuration first
-    match update_audio_settings(&settings, true) {
+    match update_audio_settings(&settings, true, None) {
         Ok(()) => {
             println!("✓ Applied via PipeWire configuration");
             println!("✓ Settings applied successfully - monitoring tab should refresh");
@@ -1534,11 +1545,15 @@ fn apply_audio_settings_with_auth(
     }
 
     // Fallback to WirePlumber device-specific configuration
-    apply_wireplumber_device_config(&settings, stream_type)
+    apply_wireplumber_device_config(&settings, stream_type, None)
 }
 
 /// Main function to apply audio settings using multiple configuration approaches with fallbacks
-pub fn update_audio_settings(settings: &AudioSettings, system_wide: bool) -> Result<(), String> {
+pub fn update_audio_settings(
+    settings: &AudioSettings,
+    system_wide: bool,
+    actual_device_name: Option<&str>,
+) -> Result<(), String> {
     println!(
         "Applying {} audio settings: {}Hz/{}bit/{} samples",
         if system_wide { "system-wide" } else { "user" },
@@ -1572,8 +1587,8 @@ pub fn update_audio_settings(settings: &AudioSettings, system_wide: bool) -> Res
     }
 
     if !success {
-        // Approach 2: Create WirePlumber config (if available)
-        match create_wireplumber_config_new(settings, system_wide) {
+        // Approach 2: Create WirePlumber config with specific device
+        match create_wireplumber_config_new(settings, system_wide, actual_device_name) {
             Ok(_) => {
                 println!("✓ Successfully created WirePlumber config");
                 success = true;
@@ -1711,14 +1726,42 @@ fn write_config_with_privileges(config_path: &str, content: &str) -> Result<(), 
 // ----------------------------------------------------------------------------
 
 /// Applies device-specific audio settings via a WirePlumber SPA-JSON configuration fragment.
+// Update create_wireplumber_config_new to accept device name
 pub fn apply_wireplumber_device_config(
     settings: &AudioSettings,
     stream_type: &str,
+    actual_device_name: Option<&str>,
 ) -> Result<(), String> {
     println!("Applying WirePlumber device configuration...");
 
-    // Always generate SPA-JSON for WirePlumber >= 0.5
-    let config_content = generate_wireplumber_config(settings, stream_type);
+    // Use the actual device name if provided, otherwise fall back to the device_id
+    let device_pattern = if let Some(real_name) = actual_device_name {
+        println!("Using real device name: {}", real_name);
+        real_name.to_string()
+    } else if settings.device_id == "default" {
+        // Try to detect the actual default device
+        match if stream_type == "output" {
+            crate::audio::detect_output_audio_device()
+        } else {
+            crate::audio::detect_input_audio_device()
+        } {
+            Ok(device_info) => {
+                if let Some(name) = crate::audio::extract_actual_device_name(&device_info) {
+                    println!("Detected actual device: {}", name);
+                    name
+                } else {
+                    "~alsa.*".to_string()
+                }
+            }
+            Err(_) => "~alsa.*".to_string(),
+        }
+    } else {
+        // Use the provided device_id directly
+        settings.device_id.clone()
+    };
+
+    // Generate SPA-JSON for WirePlumber >= 0.5
+    let config_content = generate_wireplumber_device_config(settings, stream_type, &device_pattern);
 
     let username = whoami::username();
     // CRITICAL: Use the correct path and extension for WirePlumber >= 0.5
@@ -1745,8 +1788,8 @@ pub fn apply_wireplumber_device_config(
         .map_err(|e| format!("Failed to write WirePlumber config: {}", e))?;
 
     println!(
-        "✓ WirePlumber SPA-JSON configuration created: {}",
-        config_path
+        "✓ WirePlumber SPA-JSON configuration created: {} for device: {}",
+        config_path, device_pattern
     );
 
     // Restart services to apply the new config
@@ -1754,6 +1797,61 @@ pub fn apply_wireplumber_device_config(
 
     println!("✓ Audio services restarted successfully");
     Ok(())
+}
+
+/// Generate device-specific WirePlumber configuration
+fn generate_wireplumber_device_config(
+    settings: &AudioSettings,
+    stream_type: &str,
+    device_pattern: &str,
+) -> String {
+    let audio_format = match settings.bit_depth {
+        16 => "S16LE",
+        24 => "S24LE",
+        32 => "S32LE",
+        _ => "S24LE",
+    };
+
+    let direction = if stream_type == "output" {
+        "sink"
+    } else {
+        "source"
+    };
+
+    format!(
+        r#"{{
+  "alsa-monitor": {{
+    "rules": [
+      {{
+        "matches": [
+          {{
+            "node.name": "{}"
+          }}
+        ],
+        "actions": {{
+          "update-props": {{
+            "audio.format": "{}",
+            "audio.rate": {},
+            "audio.allowed-rates": [ {} ],
+            "api.alsa.period-size": {},
+            "api.alsa.period-num": 2,
+            "api.alsa.headroom": 8192,
+            "node.description": "Pro Audio {} Device",
+            "priority.session": 1500,
+            "priority.driver": 1500
+          }}
+        }}
+      }}
+    ]
+  }}
+}}"#,
+        device_pattern,
+        audio_format,
+        settings.sample_rate,
+        settings.sample_rate,
+        settings.buffer_size,
+        stream_type
+    )
 }
 
 // ----------------------------------------------------------------------------
@@ -2541,19 +2639,18 @@ mod tests {
     #[test]
     fn test_exclusive_mode_config_safety() {
         // Test that exclusive mode config uses safe defaults
-        let config_content = format!(
-            r#"context.modules = [
-    {{
+        let config_content = r#"context.modules = [
+    {
         name = libpipewire-module-rt
-        args = {{
+        args = {
             nice.level = -11    # Should not be -20
             rt.prio = 80        # Should not be 88
             rt.time.soft = 200000  # Should not be 100000
             rt.time.hard = 200000  # Should not be 100000
-        }}
-    }}
+        }
+    }
 ]"#
-        );
+        .to_string();
 
         // Verify safe values are present
         assert!(config_content.contains("nice.level = -11"));

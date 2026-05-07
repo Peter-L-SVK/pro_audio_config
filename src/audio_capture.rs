@@ -1,7 +1,7 @@
 /*
  * Pro Audio Config - Audio Capture Module
- * Version: 1.9
- * Copyright (c) 2025 Peter Leukanič
+ * Version: 2.0
+ * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  *
  * Real-time audio monitoring with auto-detection

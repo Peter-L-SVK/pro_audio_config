@@ -16,21 +16,49 @@ See [CONTRIBUTING](https://github.com/Peter-L-SVK/pro_audio_config/blob/main/CO
 ```
 pro_audio_config/
 ├── src/
-│   ├── main.rs          # Application entry point
-│   ├── lib.rs           # Library definitions and exports
-│   ├── audio.rs         # Audio device detection and settings
-│   ├── config.rs        # PipeWire/WirePlumber configuration
-│   ├── ui.rs            # GTK user interface with tabbed interface
-│   └── utils.rs         # Utility functions
+│   ├── main.rs              # Application entry point
+│   ├── lib.rs               # Library definitions and exports
+│   ├── audio.rs             # Audio device detection and settings
+│   ├── audio_capture.rs     # Real-time audio monitoring
+│   ├── config.rs            # PipeWire/WirePlumber configuration
+│   ├── config_inspector.rs  # Configuration file browser tab
+│   ├── monitoring.rs        # Monitoring tab logic
+│   ├── utils.rs             # Utility functions
+│   ├── ui/                  # Modular UI components
+│   │   ├── mod.rs           # Module declarations and re-exports
+│   │   ├── app.rs           # AudioApp struct and main window
+│   │   ├── audio_tab.rs     # Output/Input audio tabs
+│   │   ├── advanced_tab.rs  # Advanced configuration tab
+│   │   ├── components.rs    # Shared UI widgets and helpers
+│   │   ├── constants.rs     # Sample rates, bit depths, buffer sizes
+│   │   ├── tab_types.rs     # TabType enum definitions
+│   │   ├── dialogs.rs       # Error, success, and about dialogs
+│   │   ├── helpers.rs       # String cleaning utilities
+│   │   └── preferences.rs   # AppPreferences load/save
+├── data/
+│   └── styles.css           # GTK CSS stylesheet (if needed)
+├── icons/
+│   ├── 16x16/
+│   │   └── pro-audio-config.png
+│   ├── 32x32/
+│   │   └── pro-audio-config.png
+│   ├── 48x48/
+│   │   └── pro-audio-config.png
+│   ├── 256x256/
+│   │   └── pro-audio-config.png
+│   └── icon.png             # Fallback/default icon
 ├── tests/
-│   ├── integration.rs   # Main integration tests
+│   ├── integration.rs       # Main integration tests
 │   ├── audio_integration.rs # Audio-specific integration tests
 │   ├── ui_integration.rs    # UI integration tests
-│   └── common.rs        # Test utilities
-├── icons/               # Application icons (multiple sizes)
-├── install.sh           # Installation script
-├── uninstall.sh         # Uninstallation script
-└── Cargo.toml           # Project dependencies
+│   └── common.rs            # Shared test utilities
+├── install.sh               # Installation script
+├── uninstall.sh             # Uninstallation script
+├── lint.sh                  # Linting and code quality script
+├── Cargo.toml               # Project dependencies
+├── Cargo.lock               # Dependency lock file
+├── LICENSE                  # MIT License file
+└── README.md                # Project documentation
 ```
 
 ## Tools and Configuration
