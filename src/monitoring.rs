@@ -1003,9 +1003,7 @@ mod tests {
     #[test]
     #[ignore = "Requires audio system - run locally only"]
     fn test_monitoring_tab_integration() {
-        if !init_gtk() {
-            return;
-        }
+        if !init_gtk() {}
         // ... integration test code
     }
 }

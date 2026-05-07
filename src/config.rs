@@ -2639,19 +2639,18 @@ mod tests {
     #[test]
     fn test_exclusive_mode_config_safety() {
         // Test that exclusive mode config uses safe defaults
-        let config_content = format!(
-            r#"context.modules = [
-    {{
+        let config_content = r#"context.modules = [
+    {
         name = libpipewire-module-rt
-        args = {{
+        args = {
             nice.level = -11    # Should not be -20
             rt.prio = 80        # Should not be 88
             rt.time.soft = 200000  # Should not be 100000
             rt.time.hard = 200000  # Should not be 100000
-        }}
-    }}
+        }
+    }
 ]"#
-        );
+        .to_string();
 
         // Verify safe values are present
         assert!(config_content.contains("nice.level = -11"));

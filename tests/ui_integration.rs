@@ -1,7 +1,6 @@
 //! Integration tests for UI components and data flow
 
 // Common utilities for integration tests
-use gtk;
 use pro_audio_config::audio::{AudioDevice, AudioSettings, DeviceType};
 use pro_audio_config::ui::{show_error_dialog, show_success_dialog};
 
@@ -230,20 +229,20 @@ fn test_dialog_function_safety() {
 #[test]
 fn test_ui_combo_box_simulation() {
     // Simulate the combo box data structures used in the UI
-    let sample_rates = vec![
+    let sample_rates = [
         (44100, "44.1 kHz - CD Quality"),
         (48000, "48 kHz - Standard Audio"),
         (96000, "96 kHz - High Resolution"),
         (192000, "192 kHz - Studio Quality"),
     ];
 
-    let bit_depths = vec![
+    let bit_depths = [
         (16, "16 bit - CD Quality"),
         (24, "24 bit - High Resolution"),
         (32, "32 bit - Studio Quality"),
     ];
 
-    let buffer_sizes = vec![
+    let buffer_sizes = [
         (128, "128 samples (2.7ms @48kHz)"),
         (256, "256 samples (5.3ms @48kHz)"),
         (512, "512 samples (10.7ms @48kHz)"),

@@ -2,6 +2,15 @@
 
 // Common utilities for integration tests
 use pro_audio_config::audio::{AudioDevice, AudioSettings, DeviceType};
+use pro_audio_config::audio::{
+    detect_all_audio_devices, detect_current_audio_settings, detect_input_audio_device,
+    detect_input_audio_devices, detect_output_audio_device, detect_output_audio_devices,
+    resolve_pipewire_device_name, resolve_pulse_device_name,
+};
+use pro_audio_config::config::{
+    apply_input_audio_settings_with_auth_blocking, apply_output_audio_settings_with_auth_blocking,
+};
+use std::process::Command;
 
 fn create_custom_settings(
     sample_rate: u32,
@@ -25,17 +34,6 @@ fn create_test_audio_device(name: &str, description: &str, device_type: DeviceTy
 fn is_ci_environment() -> bool {
     std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok()
 }
-
-use pro_audio_config::audio::{AudioDevice, AudioSettings, DeviceType};
-use pro_audio_config::audio::{
-    detect_all_audio_devices, detect_current_audio_settings, detect_input_audio_device,
-    detect_input_audio_devices, detect_output_audio_device, detect_output_audio_devices,
-    resolve_pipewire_device_name, resolve_pulse_device_name,
-};
-use pro_audio_config::config::{
-    apply_input_audio_settings_with_auth_blocking, apply_output_audio_settings_with_auth_blocking,
-};
-use std::process::Command;
 
 // Keep this function local to audio_integration.rs since it's audio-specific
 fn has_audio_hardware() -> bool {
