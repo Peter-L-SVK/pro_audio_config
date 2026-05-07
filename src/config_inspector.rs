@@ -1,7 +1,7 @@
 /*
  * Pro Audio Config - Configuration Inspector Module
- * Version: 1.9
- * Copyright (c) 2025 Peter Leukanič
+ * Version: 2.0
+ * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  *
  * Configuration file inspection, management, and comparison
@@ -15,7 +15,7 @@ use gtk::{
     Separator, TreeView, TreeViewColumn, Window,
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,6 +44,7 @@ pub struct ConfigInspectorTab {
     pub refresh_button: Button,
     pub user_store: ListStore,
     pub system_store: ListStore,
+    scan_in_progress: Arc<Mutex<bool>>,
 }
 
 impl Default for ConfigInspectorTab {
@@ -84,7 +85,7 @@ impl ConfigInspectorTab {
         let (user_frame, user_box) = create_section_box("User Configuration Files");
 
         let user_info_label = Label::new(Some(
-            "User configuration files (~/.config/pipewire/pipewire.conf.d/ and ~/.config/wireplumber/)",
+            "User configuration files (~/.config/pipewire/ and ~/.config/wireplumber/)",
         ));
         user_info_label.set_line_wrap(true);
         user_info_label.set_halign(gtk::Align::Start);
@@ -103,7 +104,7 @@ impl ConfigInspectorTab {
         let (system_frame, system_box) = create_section_box("System Configuration Files");
 
         let system_info_label = Label::new(Some(
-            "System configuration files (/etc/pipewire/pipewire.conf.d/ and /etc/wireplumber/)",
+            "System configuration files (/etc/pipewire/ and /etc/wireplumber/)",
         ));
         system_info_label.set_line_wrap(true);
         system_info_label.set_halign(gtk::Align::Start);
@@ -152,6 +153,7 @@ impl ConfigInspectorTab {
             refresh_button,
             user_store,
             system_store,
+            scan_in_progress: Arc::new(Mutex::new(false)),
         };
 
         // Set up double-click events
@@ -175,7 +177,6 @@ impl ConfigInspectorTab {
     }
 
     fn create_config_tree_view() -> (TreeView, ListStore) {
-        // Use gtk's glib type to avoid version conflict
         let store = ListStore::new(&[
             gtk::glib::Type::STRING, // Status indicator
             gtk::glib::Type::STRING, // File name
@@ -242,7 +243,6 @@ impl ConfigInspectorTab {
     fn open_config_file(path: &str, is_system: bool) {
         if is_system {
             let path_clone = path.to_string();
-
             println!("Opening system file: {}", path);
 
             // Create a simple script that will ask for sudo and open editor
@@ -463,17 +463,12 @@ done"#,
               sudoedit {}\n\n\
             OPTION 2 - Alternative:\n\
             • Open a terminal and run:\n\
-              sudo nano {}\n\n\
-            OPTION 3 - Graphical editor (if available):\n\
-            • Open a terminal and run:\n\
-              sudo gedit {}\n\
-              (replace 'gedit' with your preferred editor)",
-            path, path, path, path
+              sudo nano {}\n",
+            path, path, path
         );
 
         show_error_dialog(&instructions);
 
-        // Also print to console for convenience
         println!("\n═══════════════════════════════════════════════════════════");
         println!("  SYSTEM FILE EDITING INSTRUCTIONS");
         println!("═══════════════════════════════════════════════════════════");
@@ -497,6 +492,15 @@ done"#,
     }
 
     pub fn scan_configs(&self) {
+        // Prevent duplicate scans
+        {
+            let mut in_progress = self.scan_in_progress.lock().unwrap();
+            if *in_progress {
+                println!("DEBUG: Scan already in progress, skipping...");
+                return;
+            }
+            *in_progress = true;
+        }
         let status_label = self.status_label.clone();
         let user_store = self.user_store.clone();
         let system_store = self.system_store.clone();
@@ -511,107 +515,74 @@ done"#,
                 Ok(props) => props,
                 Err(e) => {
                     println!("Warning: Could not get active properties: {}", e);
-                    HashMap::new() // Return empty map on error
+                    HashMap::new()
                 }
             };
 
-            // Scan user configs
-            let (user_configs, user_errors) =
+            // Scan BOTH user and system configs in the same thread
+            let (user_configs, _user_errors) =
                 Self::scan_config_directory_with_errors(false, &active_properties);
 
-            // Scan system configs
-            let (system_configs, system_errors) =
+            let (system_configs, _system_errors) =
                 Self::scan_config_directory_with_errors(true, &active_properties);
 
             let user_len = user_configs.len();
             let system_len = system_configs.len();
 
-            let _ = tx.send((
-                user_configs,
-                system_configs,
-                user_len,
-                system_len,
-                user_errors,
-                system_errors,
-            ));
+            // Send all results at once
+            let _ = tx.send((user_configs, system_configs, user_len, system_len));
         });
 
         let rx_arc = Arc::new(Mutex::new(rx));
-        let rx_timeout = Arc::clone(&rx_arc);
+        let rx_timeout: Arc<
+            Mutex<mpsc::Receiver<(Vec<ConfigFileInfo>, Vec<ConfigFileInfo>, usize, usize)>>,
+        > = Arc::clone(&rx_arc);
 
         glib::timeout_add_local(Duration::from_millis(100), move || {
             let rx_guard = rx_timeout.lock().unwrap();
             match rx_guard.try_recv() {
-                Ok((
-                    user_configs,
-                    system_configs,
-                    user_len,
-                    system_len,
-                    user_errors,
-                    system_errors,
-                )) => {
+                Ok((user_configs, system_configs, user_len, system_len)) => {
                     // Clear and update user store
                     user_store.clear();
                     for config in &user_configs {
-                        Self::add_config_to_store(&user_store, config);
+                        ConfigInspectorTab::add_config_to_store(&user_store, config);
                     }
 
                     // Clear and update system store
                     system_store.clear();
                     for config in &system_configs {
-                        Self::add_config_to_store(&system_store, config);
+                        ConfigInspectorTab::add_config_to_store(&system_store, config);
                     }
 
+                    let total = user_len + system_len;
                     let status_text = format!(
-                        "Scan complete: {} user configs, {} system configs",
-                        user_len, system_len
+                        "Scan complete: {} user configs, {} system configs ({} total)",
+                        user_len, system_len, total
                     );
                     status_label.set_text(&status_text);
 
-                    // Show success dialog if any configs were found
-                    if user_len + system_len > 0 {
-                        // Check if there were any errors
-                        let mut all_errors = Vec::new();
-                        all_errors.extend(user_errors);
-                        all_errors.extend(system_errors);
-
-                        if !all_errors.is_empty() {
-                            show_error_dialog(&format!(
-                                "Found {} configuration files with some errors:\n• {} user files\n• {} system files\n\nErrors:\n{}",
-                                user_len + system_len,
-                                user_len,
-                                system_len,
-                                all_errors.join("\n")
-                            ));
-                        } else {
-                            show_success_dialog(&format!(
-                                "Found {} configuration files:\n• {} user configuration files\n• {} system configuration files",
-                                user_len + system_len,
-                                user_len,
-                                system_len
-                            ));
-                        }
+                    // Show only ONE dialog with combined results
+                    if total > 0 {
+                        show_success_dialog(&format!(
+                            "Configuration scan complete!\n\nFound {} configuration files:\n• {} user files\n• {} system files\n\nDouble-click any file to open it.",
+                            total, user_len, system_len
+                        ));
                     } else {
-                        show_error_dialog(
-                            "No configuration files found. Please check if PipeWire/WirePlumber is installed.",
-                        );
+                        // Just update status, no error dialog needed
+                        status_label.set_text("No configuration files found. This may be normal if PipeWire/WirePlumber use default settings.");
                     }
 
                     ControlFlow::Break
                 }
                 Err(mpsc::TryRecvError::Empty) => ControlFlow::Continue,
                 Err(_) => {
-                    status_label.set_text("Scan failed");
-                    show_error_dialog(
-                        "Failed to scan configuration files. The scanning thread may have crashed.",
-                    );
+                    status_label.set_text("Scan interrupted");
                     ControlFlow::Break
                 }
             }
         });
     }
 
-    // New method that returns errors instead of showing dialogs
     fn scan_config_directory_with_errors(
         is_system: bool,
         active_properties: &HashMap<String, Vec<String>>,
@@ -627,218 +598,163 @@ done"#,
             Path::new(&home_path)
         };
 
-        // Scan PipeWire configs
-        let pipewire_dir = base_path.join(".config/pipewire/pipewire.conf.d");
-        if pipewire_dir.exists() {
-            match fs::read_dir(&pipewire_dir) {
+        // Define all directories to scan
+        let scan_dirs: Vec<(PathBuf, &str)> = if is_system {
+            vec![
+                (PathBuf::from("/etc/pipewire"), "System PipeWire"),
+                (
+                    PathBuf::from("/etc/pipewire/pipewire.conf.d"),
+                    "System PipeWire Config",
+                ),
+                (PathBuf::from("/etc/wireplumber"), "System WirePlumber"),
+                (
+                    PathBuf::from("/etc/wireplumber/wireplumber.conf.d"),
+                    "System WirePlumber Config",
+                ),
+                (
+                    PathBuf::from("/etc/wireplumber/main.lua.d"),
+                    "System WirePlumber Lua",
+                ),
+                (
+                    PathBuf::from("/usr/share/pipewire"),
+                    "System PipeWire Defaults",
+                ),
+                (
+                    PathBuf::from("/usr/share/wireplumber"),
+                    "System WirePlumber Defaults",
+                ),
+            ]
+        } else {
+            vec![
+                // PipeWire directories
+                (
+                    PathBuf::from(format!("{}/.config/pipewire", home_path)),
+                    "User PipeWire",
+                ),
+                (
+                    PathBuf::from(format!("{}/.config/pipewire/pipewire.conf.d", home_path)),
+                    "User PipeWire Config",
+                ),
+                // WirePlumber directories
+                (
+                    PathBuf::from(format!("{}/.config/wireplumber", home_path)),
+                    "User WirePlumber",
+                ),
+                (
+                    PathBuf::from(format!(
+                        "{}/.config/wireplumber/wireplumber.conf.d",
+                        home_path
+                    )),
+                    "User WirePlumber Config",
+                ),
+                (
+                    PathBuf::from(format!("{}/.config/wireplumber/main.lua.d", home_path)),
+                    "User WirePlumber Lua",
+                ),
+                // Alternative locations
+                (
+                    PathBuf::from(format!("{}/.local/share/wireplumber", home_path)),
+                    "User WirePlumber Local",
+                ),
+                (
+                    PathBuf::from(format!(
+                        "{}/.local/share/wireplumber/wireplumber.conf.d",
+                        home_path
+                    )),
+                    "User WirePlumber Local Config",
+                ),
+            ]
+        };
+
+        for (dir_path, dir_label) in &scan_dirs {
+            if !dir_path.exists() {
+                println!(
+                    "DEBUG: Directory does not exist: {} ({})",
+                    dir_path.display(),
+                    dir_label
+                );
+                continue;
+            }
+
+            println!("DEBUG: Scanning: {} ({})", dir_path.display(), dir_label);
+
+            match fs::read_dir(dir_path) {
                 Ok(entries) => {
                     for entry in entries.flatten() {
                         match Self::process_config_entry(&entry, is_system, active_properties) {
-                            Ok(Some(info)) => configs.push(info),
-                            Ok(None) => {} // Not a config file or not a regular file
-                            Err(e) => error_messages.push(e),
-                        }
-                    }
-                }
-                Err(e) => {
-                    error_messages.push(format!(
-                        "Cannot read directory {}: {}",
-                        pipewire_dir.display(),
-                        e
-                    ));
-                }
-            }
-        } else if !is_system {
-            error_messages.push(format!(
-                "Directory does not exist: {}",
-                pipewire_dir.display()
-            ));
-        }
-
-        // Scan WirePlumber configs
-        let wireplumber_dir = base_path.join(".config/wireplumber");
-        if wireplumber_dir.exists() {
-            match fs::read_dir(&wireplumber_dir) {
-                Ok(entries) => {
-                    for entry in entries.flatten() {
-                        match Self::process_config_entry(&entry, is_system, active_properties) {
-                            Ok(Some(info)) => configs.push(info),
-                            Ok(None) => {} // Not a config file or not a regular file
-                            Err(e) => error_messages.push(e),
-                        }
-                    }
-                }
-                Err(e) => {
-                    error_messages.push(format!(
-                        "Cannot read directory {}: {}",
-                        wireplumber_dir.display(),
-                        e
-                    ));
-                }
-            }
-        } else if !is_system {
-            error_messages.push(format!(
-                "Directory does not exist: {}",
-                wireplumber_dir.display()
-            ));
-        }
-
-        // Also check system-wide directories
-        if is_system {
-            let etc_pipewire = Path::new("/etc/pipewire/pipewire.conf.d");
-            let etc_wireplumber = Path::new("/etc/wireplumber");
-
-            for dir in &[etc_pipewire, etc_wireplumber] {
-                if dir.exists() {
-                    match fs::read_dir(dir) {
-                        Ok(entries) => {
-                            for entry in entries.flatten() {
-                                match Self::process_config_entry(
-                                    &entry,
-                                    is_system,
-                                    active_properties,
-                                ) {
-                                    Ok(Some(info)) => configs.push(info),
-                                    Ok(None) => {} // Not a config file or not a regular file
-                                    Err(e) => error_messages.push(e),
-                                }
+                            Ok(Some(info)) => {
+                                println!("DEBUG: Found config: {}", info.filename);
+                                configs.push(info);
                             }
-                        }
-                        Err(e) => {
-                            error_messages.push(format!(
-                                "Cannot read directory {}: {}",
-                                dir.display(),
+                            Ok(None) => {} // Not a config file
+                            Err(e) => error_messages.push(format!(
+                                "Error processing {}: {}",
+                                entry.path().display(),
                                 e
-                            ));
+                            )),
                         }
+                    }
+                }
+                Err(e) => {
+                    // Directory not readable is NOT an error for the user, just skip it
+                    println!("DEBUG: Cannot read directory {}: {}", dir_path.display(), e);
+                }
+            }
+        }
+
+        // Also scan for main config files in the root config directories
+        let main_conf_files: Vec<PathBuf> = if is_system {
+            vec![
+                PathBuf::from("/etc/pipewire/pipewire.conf"),
+                PathBuf::from("/etc/wireplumber/wireplumber.conf"),
+            ]
+        } else {
+            vec![
+                PathBuf::from(format!("{}/.config/pipewire/pipewire.conf", home_path)),
+                PathBuf::from(format!(
+                    "{}/.config/wireplumber/wireplumber.conf",
+                    home_path
+                )),
+            ]
+        };
+
+        for conf_path in &main_conf_files {
+            if conf_path.exists() {
+                println!("DEBUG: Found main config file: {}", conf_path.display());
+                if let Ok(metadata) = fs::metadata(conf_path)
+                    && metadata.is_file()
+                {
+                    match Self::get_file_info(conf_path, is_system, active_properties) {
+                        Ok(info) => configs.push(info),
+                        Err(e) => error_messages.push(format!(
+                            "Error getting info for {}: {}",
+                            conf_path.display(),
+                            e
+                        )),
                     }
                 }
             }
         }
 
-        configs.sort_by(|a, b| b.modified.cmp(&a.modified)); // Sort by modification time
+        // Sort by modification time (newest first)
+        configs.sort_by(|a, b| b.modified.cmp(&a.modified));
+
+        // Deduplicate by full path
+        let mut seen = HashSet::new();
+        configs.retain(|config| {
+            let key = config.path.to_string_lossy().to_string();
+            seen.insert(key)
+        });
+
+        println!(
+            "DEBUG: Found {} config files in {} mode",
+            configs.len(),
+            if is_system { "system" } else { "user" }
+        );
 
         (configs, error_messages)
     }
 
-    #[allow(dead_code)] // used
-    fn scan_config_directory(
-        is_system: bool,
-        active_properties: &HashMap<String, Vec<String>>,
-    ) -> Vec<ConfigFileInfo> {
-        let mut configs = Vec::new();
-        let mut error_messages = Vec::new();
-
-        let username = username();
-        let home_path = format!("/home/{}", username);
-        let base_path = if is_system {
-            Path::new("/etc")
-        } else {
-            Path::new(&home_path)
-        };
-
-        // Scan PipeWire configs
-        let pipewire_dir = base_path.join(".config/pipewire/pipewire.conf.d");
-        if pipewire_dir.exists() {
-            match fs::read_dir(&pipewire_dir) {
-                Ok(entries) => {
-                    for entry in entries.flatten() {
-                        match Self::process_config_entry(&entry, is_system, active_properties) {
-                            Ok(Some(info)) => configs.push(info),
-                            Ok(None) => {} // Not a config file or not a regular file
-                            Err(e) => error_messages.push(e),
-                        }
-                    }
-                }
-                Err(e) => {
-                    error_messages.push(format!(
-                        "Cannot read directory {}: {}",
-                        pipewire_dir.display(),
-                        e
-                    ));
-                }
-            }
-        } else if !is_system {
-            error_messages.push(format!(
-                "Directory does not exist: {}",
-                pipewire_dir.display()
-            ));
-        }
-
-        // Scan WirePlumber configs
-        let wireplumber_dir = base_path.join(".config/wireplumber");
-        if wireplumber_dir.exists() {
-            match fs::read_dir(&wireplumber_dir) {
-                Ok(entries) => {
-                    for entry in entries.flatten() {
-                        match Self::process_config_entry(&entry, is_system, active_properties) {
-                            Ok(Some(info)) => configs.push(info),
-                            Ok(None) => {} // Not a config file or not a regular file
-                            Err(e) => error_messages.push(e),
-                        }
-                    }
-                }
-                Err(e) => {
-                    error_messages.push(format!(
-                        "Cannot read directory {}: {}",
-                        wireplumber_dir.display(),
-                        e
-                    ));
-                }
-            }
-        } else if !is_system {
-            error_messages.push(format!(
-                "Directory does not exist: {}",
-                wireplumber_dir.display()
-            ));
-        }
-
-        // Also check system-wide directories
-        if is_system {
-            let etc_pipewire = Path::new("/etc/pipewire/pipewire.conf.d");
-            let etc_wireplumber = Path::new("/etc/wireplumber");
-
-            for dir in &[etc_pipewire, etc_wireplumber] {
-                if dir.exists() {
-                    match fs::read_dir(dir) {
-                        Ok(entries) => {
-                            for entry in entries.flatten() {
-                                match Self::process_config_entry(
-                                    &entry,
-                                    is_system,
-                                    active_properties,
-                                ) {
-                                    Ok(Some(info)) => configs.push(info),
-                                    Ok(None) => {} // Not a config file or not a regular file
-                                    Err(e) => error_messages.push(e),
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error_messages.push(format!(
-                                "Cannot read directory {}: {}",
-                                dir.display(),
-                                e
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Return errors as part of the result instead of showing dialog directly
-        // The caller (main thread) will handle error display
-        if !error_messages.is_empty() {
-            // Store errors in a special config entry or return them separately
-            // For now, we'll just return the configs and let the caller handle errors
-            // Alternatively, we could create an error ConfigFileInfo
-        }
-
-        configs.sort_by(|a, b| b.modified.cmp(&a.modified)); // Sort by modification time
-        configs
-    }
-
-    // Helper method to process a directory entry
     fn process_config_entry(
         entry: &fs::DirEntry,
         is_system: bool,
@@ -855,11 +771,17 @@ done"#,
         let filename = entry.file_name();
         let filename_str = filename.to_string_lossy();
 
-        // Check if it's a config file
-        if !(filename_str.ends_with(".conf")
+        // Check if it's a config file - expanded matching
+        let is_config = filename_str.ends_with(".conf")
             || filename_str.ends_with(".lua")
-            || filename_str.ends_with(".json"))
-        {
+            || filename_str.ends_with(".json")
+            || filename_str.ends_with(".toml")
+            || filename_str == "pipewire.conf"
+            || filename_str == "wireplumber.conf"
+            || filename_str.contains("pro-audio")
+            || filename_str.contains("quantum");
+
+        if !is_config {
             return Ok(None);
         }
 
@@ -907,7 +829,6 @@ done"#,
             .to_string_lossy()
             .to_string();
 
-        // NEW: Check if this file is active using the heuristic function
         let is_active = Self::is_config_file_active(path)
             || Self::is_config_active_in_properties(&filename, active_properties);
 
@@ -927,7 +848,6 @@ done"#,
         })
     }
 
-    // Heuristic function to check if a config file is likely active
     fn is_config_file_active(path: &Path) -> bool {
         let filename = path
             .file_name()
@@ -935,22 +855,15 @@ done"#,
             .to_string_lossy()
             .to_string();
 
-        // Heuristic 1: Check filename for common high-priority/override patterns
-        // Files prefixed with high numbers (like "99-") are loaded last and override others.
         if filename.starts_with("99-") || filename.contains("pro-audio") {
             return true;
         }
 
-        // Heuristic 2: Check file content for pro-audio settings
         if let Ok(content) = fs::read_to_string(path) {
-            // A reliable marker: Check if this config was generated by *this* app.
-            // When your app creates a config, add a unique comment like:
-            // "# Generated by Pro Audio Config v1.9"
             if content.contains("# Generated by Pro Audio Config") {
                 return true;
             }
 
-            // Fallback: Check for common pro-audio property keys.
             let pro_audio_indicators = [
                 "api.alsa.period-size",
                 "api.alsa.headroom",
@@ -958,7 +871,7 @@ done"#,
                 "clock.rate",
                 "audio.format",
                 "audio.rate",
-                "session.suspend-timeout-seconds", // A common setting
+                "session.suspend-timeout-seconds",
                 "priority.driver",
                 "rt.prio",
                 "mem.lock",
@@ -975,7 +888,6 @@ done"#,
         false
     }
 
-    // Helper function to check if config is active in properties
     fn is_config_active_in_properties(
         filename: &str,
         active_properties: &HashMap<String, Vec<String>>,
@@ -1016,39 +928,41 @@ done"#,
     fn get_active_config_properties() -> Result<HashMap<String, Vec<String>>, String> {
         let mut properties = HashMap::new();
 
-        // Run pw-dump to get current PipeWire state
         match Command::new("pw-dump").output() {
             Ok(output) => {
                 if !output.status.success() {
-                    return Err(format!(
-                        "pw-dump command failed with status: {}",
-                        output.status
-                    ));
+                    return Ok(properties); // Not an error, just no data
                 }
 
                 match String::from_utf8(output.stdout) {
-                    Ok(json_str) => {
-                        match serde_json::from_str::<Value>(&json_str) {
-                            Ok(parsed) => {
-                                // Parse the JSON to find pro-audio properties
-                                if let Some(array) = parsed.as_array() {
-                                    for item in array {
-                                        if let Some(props) =
-                                            item.get("info").and_then(|i| i.get("props"))
-                                        {
-                                            Self::extract_properties(props, &mut properties);
-                                        }
+                    Ok(json_str) => match serde_json::from_str::<Value>(&json_str) {
+                        Ok(parsed) => {
+                            if let Some(array) = parsed.as_array() {
+                                for item in array {
+                                    if let Some(props) =
+                                        item.get("info").and_then(|i| i.get("props"))
+                                    {
+                                        Self::extract_properties(props, &mut properties);
                                     }
                                 }
-                                Ok(properties)
                             }
-                            Err(e) => Err(format!("Failed to parse pw-dump JSON: {}", e)),
+                            Ok(properties)
                         }
+                        Err(e) => {
+                            println!("DEBUG: Failed to parse pw-dump JSON: {}", e);
+                            Ok(properties)
+                        }
+                    },
+                    Err(e) => {
+                        println!("DEBUG: Failed to parse pw-dump output: {}", e);
+                        Ok(properties)
                     }
-                    Err(e) => Err(format!("Failed to parse pw-dump output as UTF-8: {}", e)),
                 }
             }
-            Err(e) => Err(format!("Failed to execute pw-dump command: {}", e)),
+            Err(e) => {
+                println!("DEBUG: pw-dump not available: {}", e);
+                Ok(properties)
+            }
         }
     }
 
@@ -1085,7 +999,6 @@ done"#,
     fn extract_filename_from_value(value: &Value) -> Option<String> {
         match value {
             Value::String(s) => {
-                // Try to extract filename from string value
                 if s.contains(".conf") {
                     if let Some(start) = s.rfind('/') {
                         Some(s[start + 1..].to_string())

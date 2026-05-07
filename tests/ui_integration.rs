@@ -1,10 +1,10 @@
 //! Integration tests for UI components and data flow
 
 // Common utilities for integration tests
+use gtk;
 use pro_audio_config::audio::{AudioDevice, AudioSettings, DeviceType};
 use pro_audio_config::ui::{show_error_dialog, show_success_dialog};
 
-// Test the device grouping and categorization logic
 #[test]
 fn test_device_grouping_categorization() {
     // Test the device categorization logic used in the UI for grouping
@@ -407,4 +407,22 @@ fn test_error_handling_patterns() {
             assert!(!error_display.is_empty());
         }
     }
+}
+
+#[test]
+fn test_ui_constants_consistency() {
+    // Test that all constant arrays are non-empty and have valid data
+    // These come from ui/constants.rs via re-exports
+    use pro_audio_config::ui::constants::*;
+
+    assert!(!SAMPLE_RATES.is_empty());
+    assert!(!BIT_DEPTHS.is_empty());
+    assert!(!BUFFER_SIZES.is_empty());
+    assert!(!EXCLUSIVE_BUFFER_SIZES.is_empty());
+    assert!(!CONFIG_MODES.is_empty());
+
+    // Verify expected defaults exist
+    assert!(SAMPLE_RATES.iter().any(|(rate, _)| *rate == 48000));
+    assert!(BIT_DEPTHS.iter().any(|(depth, _)| *depth == 24));
+    assert!(BUFFER_SIZES.iter().any(|(size, _)| *size == 512));
 }

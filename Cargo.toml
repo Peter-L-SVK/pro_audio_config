@@ -1,6 +1,6 @@
 [package]
 name = "pro_audio_config"
-version = "1.8.0"
+version = "2.0.0"
 authors = ["Peter Leukanič"]
 edition = "2024"
 description = "A professional audio configuration tool for Linux systems"
@@ -49,7 +49,7 @@ panic = "abort"
 
 [package.metadata.deb]
 maintainer = "Peter Leukanič"
-copyright = "2025, Peter Leukanič"
+copyright = "2025-206, Peter Leukanič"
 depends = "$auto, pipewire-alsa, wireplumber, policykit-1"
 section = "sound"
 assets = [

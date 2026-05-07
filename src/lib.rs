@@ -1,7 +1,7 @@
 /*
  * Pro Audio Config - Library
- * Version: 1.9
- * Copyright (c) 2025 Peter Leukanič
+ * Version: 2.0
+ * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
  *
@@ -39,12 +39,12 @@ pub use audio::{
 };
 
 pub use config::{
-    // Advanced configuration functions
     AdvancedAudioSettings,
     apply_advanced_audio_settings,
     apply_input_audio_settings_with_auth_blocking,
     apply_output_audio_settings_with_auth_blocking,
     apply_user_audio_settings,
+    apply_wireplumber_device_config, // NEW: Export this
     check_audio_services,
     check_exclusive_mode_status,
     cleanup_config_files,

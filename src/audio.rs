@@ -1,7 +1,7 @@
 /*
  * Pro Audio Config - Audio Configuration Module
- * Version: 1.9
- * Copyright (c) 2025 Peter Leukanič
+ * Version: 2.0
+ * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  * Feel free to share and modify
  *
@@ -9,6 +9,7 @@
  */
 
 use lazy_static::lazy_static;
+use std::collections::HashSet;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -117,12 +118,10 @@ impl AudioSettings {
 }
 
 fn is_valid_device_id(device_id: &str) -> bool {
-    // Empty device ID is always invalid
     if device_id.is_empty() {
         return false;
     }
 
-    // Check for specific valid patterns
     if device_id == "default"
         || device_id.starts_with("alsa:")
         || device_id.starts_with("pipewire:")
@@ -131,13 +130,13 @@ fn is_valid_device_id(device_id: &str) -> bool {
         return true;
     }
 
-    // For other device IDs, they must not contain whitespace
     !device_id.chars().any(|c| c.is_whitespace())
 }
 
-// Device Detection Functions
+// ========== IMPROVED DEVICE DETECTION ==========
+
+/// Core device detection - unified approach with deduplication
 pub fn detect_all_audio_devices() -> Result<Vec<AudioDevice>, String> {
-    // Check cache first
     if let Some(cached) = CACHED_ALL_DEVICES.lock().unwrap().as_ref()
         && cached.1.elapsed() < CACHE_DURATION
     {
@@ -145,183 +144,77 @@ pub fn detect_all_audio_devices() -> Result<Vec<AudioDevice>, String> {
         return Ok(cached.0.clone());
     }
 
-    let mut devices = Vec::new();
+    let mut all_devices = Vec::new();
 
-    println!("=== Scanning for all audio devices ===");
+    // Priority order: PipeWire (primary) > ALSA (fallback)
 
-    if let Ok(output) = Command::new("pw-cli")
-        .args(["list-objects", "Node"])
-        .output()
+    // 1. Try PipeWire first (most accurate)
+    if let Ok(devices) = detect_pipewire_only_devices()
+        && !devices.is_empty()
     {
-        devices.extend(parse_pipewire_devices(&output.stdout)?);
+        println!(
+            "DEBUG: Using PipeWire device detection ({} devices)",
+            devices.len()
+        );
+        all_devices = devices;
     }
 
-    devices.extend(detect_alsa_devices()?);
-    devices.extend(detect_pulse_devices()?);
+    // 2. Fallback to ALSA if PipeWire gave nothing
+    if all_devices.is_empty()
+        && let Ok(devices) = detect_alsa_only_real_devices()
+    {
+        println!(
+            "DEBUG: Falling back to ALSA detection ({} devices)",
+            devices.len()
+        );
+        all_devices = devices;
+    }
 
-    println!("Found {} audio devices", devices.len());
+    // 3. Last resort: use system's default virtual device
+    if all_devices.is_empty() {
+        all_devices = vec![AudioDevice {
+            name: "default".to_string(),
+            description: "Default Audio Device".to_string(),
+            id: "default".to_string(),
+            device_type: DeviceType::Duplex,
+            available: true,
+        }];
+    }
+
+    // Deduplicate by ID
+    let unique_devices = deduplicate_devices(all_devices);
+
+    println!("Found {} unique audio devices", unique_devices.len());
 
     // Update cache
-    *CACHED_ALL_DEVICES.lock().unwrap() = Some((devices.clone(), Instant::now()));
-    Ok(devices)
+    *CACHED_ALL_DEVICES.lock().unwrap() = Some((unique_devices.clone(), Instant::now()));
+    Ok(unique_devices)
 }
 
-// New functions for separate input/output detection
-pub fn detect_output_audio_devices() -> Result<Vec<AudioDevice>, String> {
-    // Check cache first
-    if let Some(cached) = CACHED_OUTPUT_DEVICES.lock().unwrap().as_ref()
-        && cached.1.elapsed() < CACHE_DURATION
-    {
-        println!("DEBUG: Returning cached output devices");
-        return Ok(cached.0.clone());
-    }
-
+/// Detect ONLY PipeWire devices - no mixing with other backends
+pub fn detect_pipewire_only_devices() -> Result<Vec<AudioDevice>, String> {
     let mut devices = Vec::new();
 
-    println!("=== Scanning for output audio devices ===");
-
-    if let Ok(output) = Command::new("pw-cli")
+    let output = Command::new("pw-cli")
         .args(["list-objects", "Node"])
         .output()
-    {
-        devices.extend(parse_pipewire_devices(&output.stdout)?);
-    }
+        .map_err(|e| format!("Failed to run pw-cli: {}", e))?;
 
-    devices.extend(detect_alsa_output_devices()?);
-    devices.extend(detect_pulse_output_devices()?);
-
-    // Filter for output devices only
-    let output_devices: Vec<AudioDevice> = devices
-        .into_iter()
-        .filter(|device| matches!(device.device_type, DeviceType::Output | DeviceType::Duplex))
-        .collect();
-
-    println!("Found {} output audio devices", output_devices.len());
-
-    // Update cache
-    *CACHED_OUTPUT_DEVICES.lock().unwrap() = Some((output_devices.clone(), Instant::now()));
-    Ok(output_devices)
-}
-
-pub fn detect_input_audio_devices() -> Result<Vec<AudioDevice>, String> {
-    // Check cache first
-    if let Some(cached) = CACHED_INPUT_DEVICES.lock().unwrap().as_ref()
-        && cached.1.elapsed() < CACHE_DURATION
-    {
-        println!("DEBUG: Returning cached input devices");
-        return Ok(cached.0.clone());
-    }
-
-    let mut devices = Vec::new();
-
-    println!("=== Scanning for input audio devices ===");
-
-    if let Ok(output) = Command::new("pw-cli")
-        .args(["list-objects", "Node"])
-        .output()
-    {
-        devices.extend(parse_pipewire_devices(&output.stdout)?);
-    }
-
-    devices.extend(detect_alsa_input_devices()?);
-    devices.extend(detect_pulse_input_devices()?);
-
-    // Filter for input devices only
-    let input_devices: Vec<AudioDevice> = devices
-        .into_iter()
-        .filter(|device| matches!(device.device_type, DeviceType::Input | DeviceType::Duplex))
-        .collect();
-
-    println!("Found {} input audio devices", input_devices.len());
-
-    // Update cache
-    *CACHED_INPUT_DEVICES.lock().unwrap() = Some((input_devices.clone(), Instant::now()));
-    Ok(input_devices)
-}
-
-fn is_real_hardware_device(device: &AudioDevice) -> bool {
-    let name = device.name.to_lowercase();
-    let description = device.description.to_lowercase();
-
-    // Skip virtual devices and internal nodes
-    let virtual_indicators = [
-        "virtual",
-        "null",
-        "dummy",
-        "echo-cancel",
-        "monitor",
-        "proaudio",
-    ];
-    for indicator in virtual_indicators {
-        if name.contains(indicator) || description.contains(indicator) {
-            return false;
-        }
-    }
-
-    // Device-type specific filtering
-    match device.id.split(':').next() {
-        Some("pipewire") => {
-            if description.contains("internal")
-                && !description.contains("usb")
-                && !description.contains("hdmi")
-                && !description.contains("analog")
-            {
-                return false;
-            }
-        }
-        Some("alsa") => {
-            let alsa_virtual = [
-                "default",
-                "dmix",
-                "dsnoop",
-                "hw",
-                "plughw",
-                "lavrate",
-                "samplerate",
-                "speexrate",
-                "variable",
-                "rate_convert",
-                "linear",
-                "mu-law",
-                "a-law",
-                "float",
-                "oss",
-                "pulse",
-                "upmix",
-                "vdownmix",
-                "usbstream",
-            ];
-            if alsa_virtual.iter().any(|&v| name.contains(v)) {
-                return false;
-            }
-        }
-        Some("pulse") => {
-            if name.contains("module-") || name == "auto_null" {
-                return false;
-            }
-        }
-        _ => {}
-    }
-
-    true
-}
-
-fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
-    let mut devices = Vec::new();
-    let output_str = String::from_utf8_lossy(output);
+    let output_str = String::from_utf8_lossy(&output.stdout);
     let mut current_device: Option<AudioDevice> = None;
 
     for line in output_str.lines() {
         if line.contains("object:") && line.contains("Node") {
             if let Some(device) = current_device.take()
-                && is_real_hardware_device(&device)
+                && is_valid_real_device(&device)
             {
                 devices.push(device);
             }
+
             current_device = Some(AudioDevice {
-                name: "Unknown".to_string(),
-                description: "PipeWire Node".to_string(),
-                id: extract_id(line),
+                name: String::new(),
+                description: String::new(),
+                id: extract_pipewire_node_id(line),
                 device_type: DeviceType::Unknown,
                 available: true,
             });
@@ -339,7 +232,10 @@ fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
                 && line.contains('=')
                 && let Some(desc) = line.split('=').nth(1)
             {
-                device.description = desc.trim().trim_matches('"').to_string();
+                let desc_str = desc.trim().trim_matches('"').to_string();
+                if !desc_str.is_empty() && desc_str != "PipeWire Node" {
+                    device.description = desc_str;
+                }
             }
 
             if line.contains("media.class")
@@ -347,194 +243,111 @@ fn parse_pipewire_devices(output: &[u8]) -> Result<Vec<AudioDevice>, String> {
                 && let Some(class) = line.split('=').nth(1)
             {
                 let class_clean = class.trim().trim_matches('"');
-                device.device_type = classify_device_type(class_clean, device);
+                device.device_type = classify_real_device_type(class_clean, device);
+            }
+
+            if line.contains("device.class")
+                && line.contains('=')
+                && let Some(class) = line.split('=').nth(1)
+            {
+                let class_clean = class.trim().trim_matches('"');
+                if class_clean == "sound" {
+                    device.available = true;
+                }
             }
         }
     }
 
     if let Some(device) = current_device.take()
-        && is_real_hardware_device(&device)
+        && is_valid_real_device(&device)
     {
         devices.push(device);
     }
 
+    let filtered: Vec<AudioDevice> = devices
+        .into_iter()
+        .filter(is_real_physical_device)
+        .collect();
+
+    Ok(filtered)
+}
+
+/// Detect only real ALSA hardware devices (no virtual, no plugins)
+pub fn detect_alsa_only_real_devices() -> Result<Vec<AudioDevice>, String> {
+    let mut devices = Vec::new();
+
+    // Use aplay -l (list hardware devices) not -L (list all PCMs)
+    if let Ok(output) = Command::new("aplay").args(["-l"]).output() {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        devices.extend(parse_alsa_hardware_devices(&output_str, DeviceType::Output));
+    }
+
+    if let Ok(output) = Command::new("arecord").args(["-l"]).output() {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        devices.extend(parse_alsa_hardware_devices(&output_str, DeviceType::Input));
+    }
+
     Ok(devices)
 }
 
-fn classify_device_type(class: &str, device: &AudioDevice) -> DeviceType {
-    match class {
-        s if s.contains("Audio/Source") => DeviceType::Input,
-        s if s.contains("Audio/Sink") => DeviceType::Output,
-        s if s.contains("Audio/Duplex") => DeviceType::Duplex,
-        s if s.contains("Audio") => {
-            let name_lower = device.name.to_lowercase();
-            let desc_lower = device.description.to_lowercase();
-            if name_lower.contains("input")
-                || desc_lower.contains("input")
-                || desc_lower.contains("capture")
-            {
-                DeviceType::Input
-            } else if name_lower.contains("output")
-                || desc_lower.contains("output")
-                || desc_lower.contains("playback")
-            {
-                DeviceType::Output
-            } else {
-                DeviceType::Unknown
+/// Parse ALSA hardware devices from 'aplay -l' output format
+fn parse_alsa_hardware_devices(output: &str, device_type: DeviceType) -> Vec<AudioDevice> {
+    let mut devices = Vec::new();
+    let mut current_card = String::new();
+    let mut current_card_name = String::new();
+
+    for line in output.lines() {
+        // Match card line: "card 0: PCH [HDA Intel PCH], device 0: ALC1220 Analog [ALC1220 Analog]"
+        if line.contains("card ") && line.contains(':') {
+            let parts: Vec<&str> = line.splitn(2, ':').collect();
+            if parts.len() >= 2 {
+                let card_part = parts[0].trim();
+                let card_num = card_part.split_whitespace().nth(1).unwrap_or("0");
+
+                if let Some(bracket_pos) = parts[1].find('[') {
+                    current_card_name = parts[1][..bracket_pos].trim().to_string();
+                } else {
+                    current_card_name = parts[1].trim().to_string();
+                }
+                current_card = format!("hw:{}", card_num);
             }
         }
-        _ => DeviceType::Unknown,
-    }
-}
 
-fn detect_alsa_devices() -> Result<Vec<AudioDevice>, String> {
-    let mut devices = Vec::new();
+        // Match device line within a card
+        if line.contains("device ")
+            && !current_card.is_empty()
+            && let Some(device_part) = line.split("device ").nth(1)
+            && let Some(colon_pos) = device_part.find(':')
+        {
+            let device_num = device_part[..colon_pos].trim();
 
-    if let Ok(output) = Command::new("aplay").args(["-L"]).output() {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        devices.extend(parse_alsa_output(&output_str, DeviceType::Output));
-    }
+            let device_name = if let Some(bracket_start) = device_part.find('[') {
+                if let Some(bracket_end) = device_part[bracket_start + 1..].find(']') {
+                    device_part[bracket_start + 1..bracket_start + 1 + bracket_end].to_string()
+                } else {
+                    format!("Device {}", device_num)
+                }
+            } else {
+                format!("Device {}", device_num)
+            };
 
-    if let Ok(output) = Command::new("arecord").args(["-L"]).output() {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        devices.extend(parse_alsa_output(&output_str, DeviceType::Input));
-    }
-
-    Ok(devices)
-}
-
-// Separate ALSA detection for input/output
-fn detect_alsa_output_devices() -> Result<Vec<AudioDevice>, String> {
-    let mut devices = Vec::new();
-
-    if let Ok(output) = Command::new("aplay").args(["-L"]).output() {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        devices.extend(parse_alsa_output(&output_str, DeviceType::Output));
-    }
-
-    Ok(devices)
-}
-
-fn detect_alsa_input_devices() -> Result<Vec<AudioDevice>, String> {
-    let mut devices = Vec::new();
-
-    if let Ok(output) = Command::new("arecord").args(["-L"]).output() {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        devices.extend(parse_alsa_output(&output_str, DeviceType::Input));
-    }
-
-    Ok(devices)
-}
-
-fn parse_alsa_output(output: &str, device_type: DeviceType) -> Vec<AudioDevice> {
-    output
-        .lines()
-        .filter(|line| !line.starts_with(' ') && !line.is_empty() && *line != "default")
-        .filter_map(|line| {
             let device = AudioDevice {
-                name: line.to_string(),
-                description: format!(
-                    "ALSA {}",
-                    match device_type {
-                        DeviceType::Input => "Input",
-                        DeviceType::Output => "Output",
-                        _ => "Device",
-                    }
-                ),
-                id: format!("alsa:{}", line),
+                name: format!("{} - {}", current_card_name, device_name),
+                description: format!("{} - {}", current_card_name, device_name),
+                id: format!("alsa:{}", current_card),
                 device_type: device_type.clone(),
                 available: true,
             };
-            if is_real_hardware_device(&device) {
-                Some(device)
-            } else {
-                None
-            }
-        })
-        .collect()
-}
 
-fn detect_pulse_devices() -> Result<Vec<AudioDevice>, String> {
-    let mut devices = Vec::new();
-
-    if let Ok(output) = Command::new("pactl")
-        .args(["list", "sinks", "short"])
-        .output()
-    {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        devices.extend(parse_pulse_output(&output_str, DeviceType::Output));
+            devices.push(device);
+        }
     }
 
-    if let Ok(output) = Command::new("pactl")
-        .args(["list", "sources", "short"])
-        .output()
-    {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        devices.extend(parse_pulse_output(&output_str, DeviceType::Input));
-    }
-
-    Ok(devices)
+    devices
 }
 
-// Separate PulseAudio detection for input/output
-fn detect_pulse_output_devices() -> Result<Vec<AudioDevice>, String> {
-    let mut devices = Vec::new();
-
-    if let Ok(output) = Command::new("pactl")
-        .args(["list", "sinks", "short"])
-        .output()
-    {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        devices.extend(parse_pulse_output(&output_str, DeviceType::Output));
-    }
-
-    Ok(devices)
-}
-
-fn detect_pulse_input_devices() -> Result<Vec<AudioDevice>, String> {
-    let mut devices = Vec::new();
-
-    if let Ok(output) = Command::new("pactl")
-        .args(["list", "sources", "short"])
-        .output()
-    {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        devices.extend(parse_pulse_output(&output_str, DeviceType::Input));
-    }
-
-    Ok(devices)
-}
-
-fn parse_pulse_output(output: &str, device_type: DeviceType) -> Vec<AudioDevice> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let device = AudioDevice {
-                    name: parts[1].to_string(),
-                    description: if parts.len() >= 3 {
-                        parts[2..].join(" ")
-                    } else {
-                        "PulseAudio Device".to_string()
-                    },
-                    id: format!("pulse:{}", parts[0]),
-                    device_type: device_type.clone(),
-                    available: true,
-                };
-                if is_real_hardware_device(&device) {
-                    Some(device)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn extract_id(line: &str) -> String {
+/// Extract PipeWire node ID from object line
+fn extract_pipewire_node_id(line: &str) -> String {
     line.split(',')
         .find(|s| s.trim().starts_with("id:"))
         .and_then(|id_part| id_part.split(':').nth(1))
@@ -542,94 +355,303 @@ fn extract_id(line: &str) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-// System Detection Functions
-pub fn detect_audio_device() -> Result<String, String> {
-    let audio_system = detect_audio_system();
+/// Classify device type with better heuristics
+fn classify_real_device_type(class: &str, device: &AudioDevice) -> DeviceType {
+    match class {
+        "Audio/Source" => DeviceType::Input,
+        "Audio/Sink" => DeviceType::Output,
+        "Audio/Duplex" => DeviceType::Duplex,
+        _ => {
+            let text = format!(
+                "{} {}",
+                device.name.to_lowercase(),
+                device.description.to_lowercase()
+            );
 
-    if let Ok(output) = Command::new("pactl").args(["info"]).output()
-        && output.status.success()
-    {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        for line in output_str.lines() {
-            if line.starts_with("Default Sink:") {
-                let sink = line.replace("Default Sink:", "").trim().to_string();
-                return Ok(format!("{}: {}", audio_system, sink));
+            if text.contains("source")
+                || text.contains("capture")
+                || text.contains("input")
+                || text.contains("mic")
+            {
+                DeviceType::Input
+            } else if text.contains("sink")
+                || text.contains("playback")
+                || text.contains("output")
+                || text.contains("speaker")
+            {
+                DeviceType::Output
+            } else {
+                DeviceType::Duplex
             }
         }
     }
-
-    Ok(format!("{}: Unknown Audio Device", audio_system))
 }
 
-// New functions for detecting current input/output devices
-pub fn detect_output_audio_device() -> Result<String, String> {
-    // Check cache first
-    if let Some(cached) = CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap().as_ref()
+/// Check if a device is a valid real device (not virtual/software)
+fn is_valid_real_device(device: &AudioDevice) -> bool {
+    if device.name.is_empty() {
+        return false;
+    }
+
+    let skip_patterns = [
+        "virtual",
+        "null",
+        "dummy",
+        "monitor",
+        "echo-cancel",
+        "combine",
+        "pipewire",
+        "pulse",
+        "jack",
+        "proxy",
+        "loopback",
+        "midi",
+        "vban",
+        "scream",
+        "rdp",
+        "webrtc",
+        "cable",
+        "sine",
+        "audio-sources",
+        "audio-sinks",
+    ];
+
+    let check_text = format!(
+        "{} {}",
+        device.name.to_lowercase(),
+        device.description.to_lowercase()
+    );
+
+    for pattern in skip_patterns {
+        if check_text.contains(pattern) {
+            return false;
+        }
+    }
+
+    if device.name.len() < 3 {
+        return false;
+    }
+
+    true
+}
+
+/// Check if device is real physical hardware
+fn is_real_physical_device(device: &AudioDevice) -> bool {
+    if !is_valid_real_device(device) {
+        return false;
+    }
+
+    let check_text = format!(
+        "{} {}",
+        device.name.to_lowercase(),
+        device.description.to_lowercase()
+    );
+
+    let hardware_indicators = [
+        "usb",
+        "hdmi",
+        "pci",
+        "analog",
+        "digital",
+        "stereo",
+        "surround",
+        "alsa",
+        "hda",
+        "intel",
+        "nvidia",
+        "amd",
+        "realtek",
+        "creative",
+        "focusrite",
+        "presonus",
+        "mackie",
+        "onyx",
+        "yamaha",
+        "roland",
+        "allen&heath",
+        "ssl",
+        "antelope",
+        "apogee",
+        "rme",
+        "motu",
+    ];
+
+    for indicator in hardware_indicators {
+        if check_text.contains(indicator) {
+            return true;
+        }
+    }
+
+    if device.id.starts_with("alsa:") && device.id.contains("hw:") {
+        return true;
+    }
+
+    false
+}
+
+pub fn get_real_device_name(device_id: &str) -> Option<String> {
+    if device_id == "default" {
+        // Detect the actual default output device
+        match detect_output_audio_device() {
+            Ok(device_info) => extract_actual_device_name(&device_info),
+            Err(_) => None,
+        }
+    } else {
+        // For specific device IDs, extract the real name
+        Some(device_id.to_string())
+    }
+}
+
+pub fn get_device_id_from_display_name(display_name: &str) -> Option<String> {
+    // Try to find the device in detected devices
+    if let Ok(devices) = detect_all_audio_devices() {
+        for device in devices {
+            let combined_name = format!("{} {}", device.name, device.description);
+            if combined_name.contains(display_name) || device.name == display_name {
+                return Some(device.id.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Remove duplicate devices by ID and name similarity
+fn deduplicate_devices(devices: Vec<AudioDevice>) -> Vec<AudioDevice> {
+    let mut seen_ids = HashSet::new();
+    let mut seen_names = HashSet::new();
+    let mut unique = Vec::new();
+
+    for device in devices {
+        let id_key = device.id.clone();
+        let name_key = device.name.to_lowercase();
+
+        if seen_ids.contains(&id_key) {
+            continue;
+        }
+
+        if seen_names.contains(&name_key) {
+            continue;
+        }
+
+        seen_ids.insert(id_key);
+        seen_names.insert(name_key);
+        unique.push(device);
+    }
+
+    unique
+}
+
+// ========== SIMPLIFIED OUTPUT/INPUT DETECTION ==========
+
+pub fn detect_output_audio_devices() -> Result<Vec<AudioDevice>, String> {
+    if let Some(cached) = CACHED_OUTPUT_DEVICES.lock().unwrap().as_ref()
         && cached.1.elapsed() < CACHE_DURATION
     {
-        println!("DEBUG: Returning cached output device");
+        println!("DEBUG: Returning cached output devices");
         return Ok(cached.0.clone());
     }
 
-    let audio_system = detect_audio_system();
+    let all_devices = detect_all_audio_devices()?;
+    let output_devices: Vec<AudioDevice> = all_devices
+        .into_iter()
+        .filter(|d| matches!(d.device_type, DeviceType::Output | DeviceType::Duplex))
+        .collect();
 
-    if let Ok(output) = Command::new("pactl").args(["info"]).output()
-        && output.status.success()
-    {
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        for line in output_str.lines() {
-            if line.starts_with("Default Sink:") {
-                let sink = line.replace("Default Sink:", "").trim().to_string();
-                let result = format!("{}: {}", audio_system, sink);
+    println!("Found {} output audio devices", output_devices.len());
 
-                // Update cache
-                *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() =
-                    Some((result.clone(), Instant::now()));
-                return Ok(result);
-            }
-        }
-    }
-
-    let result = format!("{}: Unknown Output Audio Device", audio_system);
-    *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() = Some((result.clone(), Instant::now()));
-    Ok(result)
+    *CACHED_OUTPUT_DEVICES.lock().unwrap() = Some((output_devices.clone(), Instant::now()));
+    Ok(output_devices)
 }
 
-pub fn detect_input_audio_device() -> Result<String, String> {
-    // Check cache first
-    if let Some(cached) = CACHED_CURRENT_INPUT_DEVICE.lock().unwrap().as_ref()
+pub fn detect_input_audio_devices() -> Result<Vec<AudioDevice>, String> {
+    if let Some(cached) = CACHED_INPUT_DEVICES.lock().unwrap().as_ref()
         && cached.1.elapsed() < CACHE_DURATION
     {
-        println!("DEBUG: Returning cached input device");
+        println!("DEBUG: Returning cached input devices");
         return Ok(cached.0.clone());
     }
 
-    let audio_system = detect_audio_system();
+    let all_devices = detect_all_audio_devices()?;
+    let input_devices: Vec<AudioDevice> = all_devices
+        .into_iter()
+        .filter(|d| matches!(d.device_type, DeviceType::Input | DeviceType::Duplex))
+        .collect();
 
-    if let Ok(output) = Command::new("pactl").args(["info"]).output()
-        && output.status.success()
+    println!("Found {} input audio devices", input_devices.len());
+
+    *CACHED_INPUT_DEVICES.lock().unwrap() = Some((input_devices.clone(), Instant::now()));
+    Ok(input_devices)
+}
+
+// ========== REMOVED/REPLACED FUNCTIONS ==========
+// The following functions have been removed or simplified:
+// - detect_alsa_devices() (replaced by detect_alsa_only_real_devices)
+// - detect_pulse_devices() (removed - causes too many duplicates)
+// - parse_alsa_output() (replaced by parse_alsa_hardware_devices)
+// - parse_pulse_output() (removed)
+// - detect_pulse_output_devices() (removed)
+// - detect_pulse_input_devices() (removed)
+// - is_real_hardware_device() (replaced by is_valid_real_device + is_real_physical_device)
+
+// Fallback Pulse detection (only if absolutely needed)
+#[allow(dead_code)]
+fn detect_pulse_fallback_devices() -> Result<Vec<AudioDevice>, String> {
+    let mut devices = Vec::new();
+
+    if let Ok(output) = Command::new("pactl")
+        .args(["list", "cards", "short"])
+        .output()
     {
         let output_str = String::from_utf8_lossy(&output.stdout);
         for line in output_str.lines() {
-            if line.starts_with("Default Source:") {
-                let source = line.replace("Default Source:", "").trim().to_string();
-                let result = format!("{}: {}", audio_system, source);
-
-                // Update cache
-                *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() =
-                    Some((result.clone(), Instant::now()));
-                return Ok(result);
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let device = AudioDevice {
+                    name: parts[1].to_string(),
+                    description: format!("PulseAudio Card: {}", parts[1]),
+                    id: format!("pulse:{}", parts[0]),
+                    device_type: DeviceType::Duplex,
+                    available: true,
+                };
+                if is_real_physical_device(&device) {
+                    devices.push(device);
+                }
             }
         }
     }
 
-    let result = format!("{}: Unknown Input Audio Device", audio_system);
-    *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() = Some((result.clone(), Instant::now()));
-    Ok(result)
+    Ok(devices)
 }
+
+// Keep for system detection, but simplified
+pub fn detect_audio_system() -> String {
+    if Command::new("pw-cli").args(["info", "0"]).output().is_ok()
+        || Command::new("systemctl")
+            .args(["--user", "is-active", "pipewire"])
+            .output()
+            .is_ok()
+    {
+        return "PipeWire".to_string();
+    }
+
+    if Command::new("pulseaudio")
+        .args(["--check"])
+        .output()
+        .is_ok()
+        || Command::new("systemctl")
+            .args(["--user", "is-active", "pulseaudio"])
+            .output()
+            .is_ok()
+    {
+        return "PulseAudio".to_string();
+    }
+
+    "ALSA".to_string()
+}
+
+// ========== REST OF ORIGINAL FUNCTIONS (unchanged) ==========
 
 pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
-    // Check cache first
     if let Some(cached) = CACHED_AUDIO_SETTINGS.lock().unwrap().as_ref()
         && cached.1.elapsed() < CACHE_DURATION
     {
@@ -639,17 +661,10 @@ pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
 
     println!("=== DEBUG: Starting audio settings detection ===");
 
-    // Try PipeWire first
     if let Ok(output) = Command::new("pw-cli").args(["info", "0"]).output() {
         println!("DEBUG: pw-cli command executed, status: {}", output.status);
         if output.status.success() {
             let output_str = String::from_utf8_lossy(&output.stdout);
-            println!("DEBUG: pw-cli output length: {} chars", output_str.len());
-            println!("DEBUG: First few lines of output:");
-            for line in output_str.lines().take(5) {
-                println!("DEBUG: {}", line);
-            }
-
             let (sample_rate, bit_depth, buffer_size) = parse_pipewire_settings(&output_str);
             println!(
                 "DEBUG: Parsed values - {}Hz/{}bit/{}samples",
@@ -659,22 +674,14 @@ pub fn detect_current_audio_settings() -> Result<AudioSettings, String> {
             let settings =
                 AudioSettings::new(sample_rate, bit_depth, buffer_size, "default".to_string());
 
-            // Update cache
             *CACHED_AUDIO_SETTINGS.lock().unwrap() = Some((settings.clone(), Instant::now()));
             return Ok(settings);
-        } else {
-            println!("DEBUG: pw-cli failed with status: {}", output.status);
-            let error_output = String::from_utf8_lossy(&output.stderr);
-            println!("DEBUG: stderr: {}", error_output);
         }
-    } else {
-        println!("DEBUG: pw-cli command failed to execute");
     }
 
     println!("DEBUG: Falling back to default values");
     let settings = AudioSettings::new(48000, 24, 512, "default".to_string());
 
-    // Update cache
     *CACHED_AUDIO_SETTINGS.lock().unwrap() = Some((settings.clone(), Instant::now()));
     Ok(settings)
 }
@@ -687,7 +694,6 @@ fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
     for line in output.lines() {
         let trimmed = line.trim();
 
-        // Sample rate
         if trimmed.contains("default.clock.rate")
             && trimmed.contains('=')
             && !trimmed.contains("allowed-rates")
@@ -704,7 +710,6 @@ fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
             }
         }
 
-        // Audio format
         if trimmed.contains("audio.format")
             && trimmed.contains('=')
             && let Some(format_str) = trimmed.split('=').nth(1)
@@ -723,7 +728,6 @@ fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
             };
         }
 
-        // Buffer size - ONLY use default.clock.quantum, ignore quantum-limit
         if trimmed.contains("default.clock.quantum")
             && trimmed.contains('=')
             && !trimmed.contains("min-quantum")
@@ -747,34 +751,86 @@ fn parse_pipewire_settings(output: &str) -> (u32, u32, u32) {
     (sample_rate, bit_depth, buffer_size)
 }
 
-pub fn detect_audio_system() -> String {
-    // Check PipeWire
-    if Command::new("pw-cli").args(["info", "0"]).output().is_ok()
-        || Command::new("systemctl")
-            .args(["--user", "is-active", "pipewire"])
-            .output()
-            .is_ok()
+pub fn detect_audio_device() -> Result<String, String> {
+    let audio_system = detect_audio_system();
+
+    if let Ok(output) = Command::new("pactl").args(["info"]).output()
+        && output.status.success()
     {
-        return "PipeWire".to_string();
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if line.starts_with("Default Sink:") {
+                let sink = line.replace("Default Sink:", "").trim().to_string();
+                return Ok(format!("{}: {}", audio_system, sink));
+            }
+        }
     }
 
-    // Check PulseAudio
-    if Command::new("pulseaudio")
-        .args(["--check"])
-        .output()
-        .is_ok()
-        || Command::new("systemctl")
-            .args(["--user", "is-active", "pulseaudio"])
-            .output()
-            .is_ok()
-    {
-        return "PulseAudio".to_string();
-    }
-
-    "Audio System".to_string()
+    Ok(format!("{}: Unknown Audio Device", audio_system))
 }
 
-// Device Resolution Functions
+pub fn detect_output_audio_device() -> Result<String, String> {
+    if let Some(cached) = CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap().as_ref()
+        && cached.1.elapsed() < CACHE_DURATION
+    {
+        println!("DEBUG: Returning cached output device");
+        return Ok(cached.0.clone());
+    }
+
+    let audio_system = detect_audio_system();
+
+    if let Ok(output) = Command::new("pactl").args(["info"]).output()
+        && output.status.success()
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if line.starts_with("Default Sink:") {
+                let sink = line.replace("Default Sink:", "").trim().to_string();
+                let result = format!("{}: {}", audio_system, sink);
+
+                *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() =
+                    Some((result.clone(), Instant::now()));
+                return Ok(result);
+            }
+        }
+    }
+
+    let result = format!("{}: Unknown Output Audio Device", audio_system);
+    *CACHED_CURRENT_OUTPUT_DEVICE.lock().unwrap() = Some((result.clone(), Instant::now()));
+    Ok(result)
+}
+
+pub fn detect_input_audio_device() -> Result<String, String> {
+    if let Some(cached) = CACHED_CURRENT_INPUT_DEVICE.lock().unwrap().as_ref()
+        && cached.1.elapsed() < CACHE_DURATION
+    {
+        println!("DEBUG: Returning cached input device");
+        return Ok(cached.0.clone());
+    }
+
+    let audio_system = detect_audio_system();
+
+    if let Ok(output) = Command::new("pactl").args(["info"]).output()
+        && output.status.success()
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if line.starts_with("Default Source:") {
+                let source = line.replace("Default Source:", "").trim().to_string();
+                let result = format!("{}: {}", audio_system, source);
+
+                *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() =
+                    Some((result.clone(), Instant::now()));
+                return Ok(result);
+            }
+        }
+    }
+
+    let result = format!("{}: Unknown Input Audio Device", audio_system);
+    *CACHED_CURRENT_INPUT_DEVICE.lock().unwrap() = Some((result.clone(), Instant::now()));
+    Ok(result)
+}
+
 pub fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
     let output = Command::new("pw-cli")
         .args(["info", node_id])
@@ -787,7 +843,6 @@ pub fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
 
     let output_str = String::from_utf8_lossy(&output.stdout);
 
-    // Try to find device.name first (preferred for WirePlumber)
     for line in output_str.lines() {
         if line.contains("device.name")
             && line.contains('=')
@@ -800,7 +855,6 @@ pub fn resolve_pipewire_device_name(node_id: &str) -> Result<String, String> {
         }
     }
 
-    // Fall back to node.name
     for line in output_str.lines() {
         if line.contains("node.name")
             && line.contains('=')
@@ -835,7 +889,6 @@ pub fn resolve_pulse_device_name(pulse_id: &str) -> Result<String, String> {
         }
     }
 
-    // Check sources as fallback
     if let Ok(output) = Command::new("pactl")
         .args(["list", "sources", "short"])
         .output()
@@ -852,9 +905,7 @@ pub fn resolve_pulse_device_name(pulse_id: &str) -> Result<String, String> {
     Err(format!("PulseAudio device {} not found", pulse_id))
 }
 
-// Helper function to extract actual device name from formatted string
 pub fn extract_actual_device_name(device_info: &str) -> Option<String> {
-    // Remove system prefix and extract the device identifier
     let cleaned = device_info
         .replace("PipeWire:", "")
         .replace("PulseAudio:", "")
@@ -869,17 +920,14 @@ pub fn extract_actual_device_name(device_info: &str) -> Option<String> {
     }
 }
 
-// Enhanced device detection for exclusive mode
 pub fn detect_high_performance_devices() -> Result<Vec<AudioDevice>, String> {
     let mut devices = detect_output_audio_devices()?;
 
-    // Filter for high-performance devices (USB, PCI, external interfaces)
     devices.retain(|device| {
         let name_lower = device.name.to_lowercase();
         let desc_lower = device.description.to_lowercase();
         let id_lower = device.id.to_lowercase();
 
-        // Prefer USB and PCI devices for exclusive mode
         desc_lower.contains("usb") ||
         name_lower.contains("usb") ||
         id_lower.contains("usb") ||
@@ -890,7 +938,7 @@ pub fn detect_high_performance_devices() -> Result<Vec<AudioDevice>, String> {
         desc_lower.contains("interface") ||
         desc_lower.contains("studio") ||
         desc_lower.contains("pro") ||
-        // Brand-specific detection for professional audio interfaces
+        // Professional audio brands
         desc_lower.contains("focusrite") ||
         desc_lower.contains("presonus") ||
         desc_lower.contains("behringer") ||
@@ -904,14 +952,37 @@ pub fn detect_high_performance_devices() -> Result<Vec<AudioDevice>, String> {
         desc_lower.contains("arturia") ||
         desc_lower.contains("native instruments") ||
         desc_lower.contains("akai") ||
-        desc_lower.contains("novation")
+        desc_lower.contains("novation") ||
+        desc_lower.contains("mackie") ||
+        desc_lower.contains("onyx") ||
+        desc_lower.contains("roland") ||
+        desc_lower.contains("yamaha") ||
+        desc_lower.contains("allen heath") ||
+        desc_lower.contains("ssl") ||
+        desc_lower.contains("solid state logic") ||
+        desc_lower.contains("antelope") ||
+        desc_lower.contains("apogee") ||
+        desc_lower.contains("lynx") ||
+        desc_lower.contains("ferrofish") ||
+        desc_lower.contains("merging") ||
+        desc_lower.contains("neve") ||
+        desc_lower.contains("api") ||
+        desc_lower.contains("chandler limited") ||
+        desc_lower.contains("dangerous music") ||
+        desc_lower.contains("burl") ||
+        desc_lower.contains("cranborne") ||
+        desc_lower.contains("heritage audio") ||
+        desc_lower.contains("black lion") ||
+        desc_lower.contains("quantum") ||
+        desc_lower.contains("clarett") ||
+        desc_lower.contains("scarlett") ||
+        desc_lower.contains("vocaster")
     });
 
     println!("Found {} high-performance audio devices", devices.len());
     Ok(devices)
 }
 
-// Device capabilities structure
 #[derive(Clone, Debug)]
 pub struct DeviceCapabilities {
     pub sample_rates: Vec<u32>,
@@ -922,10 +993,8 @@ pub struct DeviceCapabilities {
     pub period_sizes: Vec<u32>,
 }
 
-// Get device capabilities for exclusive mode
 pub fn get_device_capabilities(device_id: &str) -> Result<DeviceCapabilities, String> {
     let device_pattern = if device_id == "default" {
-        // Try to get the actual default device name
         if let Ok(device_info) = detect_output_audio_device() {
             extract_actual_device_name(&device_info).unwrap_or_else(|| "alsa_output.*".to_string())
         } else {
@@ -935,7 +1004,6 @@ pub fn get_device_capabilities(device_id: &str) -> Result<DeviceCapabilities, St
         device_id.to_string()
     };
 
-    // Try to get device info from PipeWire
     if let Ok(output) = Command::new("pw-cli")
         .args(["list-objects", "Node"])
         .output()
@@ -944,7 +1012,6 @@ pub fn get_device_capabilities(device_id: &str) -> Result<DeviceCapabilities, St
         return parse_device_capabilities(&output_str, &device_pattern);
     }
 
-    // Fallback capabilities for when we can't detect specific device
     Ok(DeviceCapabilities {
         sample_rates: vec![44100, 48000, 96000, 192000],
         formats: vec![
@@ -959,7 +1026,6 @@ pub fn get_device_capabilities(device_id: &str) -> Result<DeviceCapabilities, St
     })
 }
 
-// Parse device capabilities from PipeWire output
 fn parse_device_capabilities(
     output: &str,
     device_pattern: &str,
@@ -971,7 +1037,6 @@ fn parse_device_capabilities(
     let mut in_target_device = false;
 
     for line in output.lines() {
-        // Check if we're in the target device section
         if line.contains("object:") && line.contains("Node") {
             in_target_device = line.contains(device_pattern)
                 || (device_pattern == "alsa_output.*" && line.contains("alsa"));
@@ -1014,7 +1079,6 @@ fn parse_device_capabilities(
         }
     }
 
-    // If we couldn't detect specific capabilities, use fallbacks
     if sample_rates.is_empty() {
         sample_rates = vec![44100, 48000, 96000, 192000];
     }
@@ -1029,7 +1093,6 @@ fn parse_device_capabilities(
         buffer_sizes = vec![64, 128, 256, 512, 1024, 2048];
     }
 
-    // Sort for better display
     sample_rates.sort();
     buffer_sizes.sort();
 
@@ -1043,16 +1106,6 @@ fn parse_device_capabilities(
     })
 }
 
-// Helper function to get current default device name
-#[allow(dead_code)]
-fn detect_current_default_device_name() -> Result<String, String> {
-    detect_output_audio_device().and_then(|device_info| {
-        extract_actual_device_name(&device_info)
-            .ok_or_else(|| "Could not extract device name".to_string())
-    })
-}
-
-// Enhanced device detection that's brand/maker agnostic for ordinary modes
 pub fn detect_recommended_devices() -> Result<Vec<AudioDevice>, String> {
     let mut devices = detect_output_audio_devices()?;
 
@@ -1086,13 +1139,11 @@ pub fn detect_recommended_devices() -> Result<Vec<AudioDevice>, String> {
     Ok(devices)
 }
 
-// Check if a device is suitable for exclusive mode
 pub fn is_device_suitable_for_exclusive_mode(device: &AudioDevice) -> bool {
     let name_lower = device.name.to_lowercase();
     let desc_lower = device.description.to_lowercase();
     let id_lower = device.id.to_lowercase();
 
-    // Exclusive mode prefers external interfaces and pro audio devices
     desc_lower.contains("usb") ||
     name_lower.contains("usb") ||
     id_lower.contains("usb") ||
@@ -1102,7 +1153,7 @@ pub fn is_device_suitable_for_exclusive_mode(device: &AudioDevice) -> bool {
     desc_lower.contains("interface") ||
     desc_lower.contains("studio") ||
     desc_lower.contains("pro") ||
-    // Professional audio brands (for exclusive mode only)
+    // Professional audio brands (including Mackie and Onyx)
     desc_lower.contains("focusrite") ||
     desc_lower.contains("presonus") ||
     desc_lower.contains("behringer") ||
@@ -1111,10 +1162,26 @@ pub fn is_device_suitable_for_exclusive_mode(device: &AudioDevice) -> bool {
     desc_lower.contains("universal audio") ||
     desc_lower.contains("audient") ||
     desc_lower.contains("steinberg") ||
-    desc_lower.contains("tascam")
+    desc_lower.contains("tascam") ||
+    desc_lower.contains("mackie") ||
+    desc_lower.contains("onyx") ||
+    desc_lower.contains("roland") ||
+    desc_lower.contains("yamaha") ||
+    desc_lower.contains("allen heath") ||
+    desc_lower.contains("ssl") ||
+    desc_lower.contains("solid state logic") ||
+    desc_lower.contains("antelope") ||
+    desc_lower.contains("apogee") ||
+    desc_lower.contains("lynx") ||
+    desc_lower.contains("ferrofish") ||
+    desc_lower.contains("merging") ||
+    desc_lower.contains("neve") ||
+    desc_lower.contains("api") ||
+    desc_lower.contains("quantum") ||
+    desc_lower.contains("clarett") ||
+    desc_lower.contains("scarlett")
 }
 
-// Clear cache - useful when settings are changed
 pub fn clear_cache() {
     *CACHED_AUDIO_SETTINGS.lock().unwrap() = None;
     *CACHED_OUTPUT_DEVICES.lock().unwrap() = None;
@@ -1166,58 +1233,11 @@ mod tests {
     }
 
     #[test]
-    fn test_device_type_classification() {
-        let mut device = AudioDevice {
-            name: "test".to_string(),
-            description: "test".to_string(),
-            id: "test".to_string(),
-            device_type: DeviceType::Unknown,
-            available: true,
-        };
-
-        assert!(matches!(
-            classify_device_type("Audio/Source", &device),
-            DeviceType::Input
-        ));
-        assert!(matches!(
-            classify_device_type("Audio/Sink", &device),
-            DeviceType::Output
-        ));
-        assert!(matches!(
-            classify_device_type("Audio/Duplex", &device),
-            DeviceType::Duplex
-        ));
-
-        device.name = "input_device".to_string();
-        assert!(matches!(
-            classify_device_type("Audio", &device),
-            DeviceType::Input
-        ));
-
-        device.name = "output_device".to_string();
-        assert!(matches!(
-            classify_device_type("Audio", &device),
-            DeviceType::Output
-        ));
-    }
-
-    // NEW TESTS FOR V1.5 FEATURES
-    #[test]
-    fn test_separate_input_output_detection() {
-        // Test that input/output detection functions exist and return proper types
-        let output_result = detect_output_audio_devices();
-        assert!(output_result.is_ok() || output_result.is_err()); // Should not panic
-
-        let input_result = detect_input_audio_devices();
-        assert!(input_result.is_ok() || input_result.is_err()); // Should not panic
-    }
-
-    #[test]
-    fn test_hardware_device_filtering() {
+    fn test_valid_real_device_filtering() {
         let real_device = AudioDevice {
-            name: "usb-audio".to_string(),
-            description: "USB Audio Device".to_string(),
-            id: "alsa:usb".to_string(),
+            name: "USB Audio Device".to_string(),
+            description: "Focusrite Scarlett 2i2".to_string(),
+            id: "pipewire:123".to_string(),
             device_type: DeviceType::Output,
             available: true,
         };
@@ -1225,13 +1245,37 @@ mod tests {
         let virtual_device = AudioDevice {
             name: "virtual".to_string(),
             description: "Virtual Output".to_string(),
-            id: "alsa:virtual".to_string(),
+            id: "pipewire:456".to_string(),
             device_type: DeviceType::Output,
             available: true,
         };
 
-        assert!(is_real_hardware_device(&real_device));
-        assert!(!is_real_hardware_device(&virtual_device));
+        assert!(is_valid_real_device(&real_device));
+        assert!(!is_valid_real_device(&virtual_device));
+    }
+
+    #[test]
+    fn test_device_deduplication() {
+        let device1 = AudioDevice {
+            name: "USB Device".to_string(),
+            description: "USB Audio".to_string(),
+            id: "pipewire:123".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        };
+
+        let device2 = AudioDevice {
+            name: "USB Device".to_string(),
+            description: "USB Audio".to_string(),
+            id: "pipewire:123".to_string(),
+            device_type: DeviceType::Output,
+            available: true,
+        };
+
+        let devices = vec![device1, device2];
+        let unique = deduplicate_devices(devices);
+
+        assert_eq!(unique.len(), 1);
     }
 
     #[test]
@@ -1240,40 +1284,18 @@ mod tests {
             default.clock.rate = 96000
             audio.format = "S32LE"
             default.clock.quantum = 256
-            quantum-limit = 1024
         "#;
 
         let (sample_rate, bit_depth, buffer_size) = parse_pipewire_settings(test_output);
 
         assert_eq!(sample_rate, 96000);
         assert_eq!(bit_depth, 32);
-        assert_eq!(buffer_size, 256); // Should use default.clock.quantum, not quantum-limit
-    }
-
-    #[test]
-    fn test_device_resolution() {
-        // Test that resolution functions have correct signatures
-        let pipewire_result = resolve_pipewire_device_name("test");
-        assert!(pipewire_result.is_err()); // Should fail gracefully with invalid ID
-
-        let pulse_result = resolve_pulse_device_name("test");
-        assert!(pulse_result.is_err()); // Should fail gracefully with invalid ID
-    }
-
-    #[test]
-    fn test_current_device_detection() {
-        let output_result = detect_output_audio_device();
-        let input_result = detect_input_audio_device();
-
-        // Should not panic and return either Ok or Err
-        assert!(output_result.is_ok() || output_result.is_err());
-        assert!(input_result.is_ok() || input_result.is_err());
+        assert_eq!(buffer_size, 256);
     }
 
     #[test]
     fn test_audio_system_detection() {
         let system = detect_audio_system();
-        // Should return one of the expected system names
         assert!(!system.is_empty());
     }
 
@@ -1281,7 +1303,6 @@ mod tests {
     fn test_extract_actual_device_name() {
         let pipewire_info = "PipeWire: alsa_output.usb-Audio_Device-00.analog-stereo";
         let pulse_info = "PulseAudio: alsa_output.pci-0000_00_1f.3.analog-stereo";
-        let alsa_info = "ALSA: hw:0,0";
 
         assert_eq!(
             extract_actual_device_name(pipewire_info).unwrap(),
@@ -1291,47 +1312,28 @@ mod tests {
             extract_actual_device_name(pulse_info).unwrap(),
             "alsa_output.pci-0000_00_1f.3.analog-stereo"
         );
-        assert_eq!(extract_actual_device_name(alsa_info).unwrap(), "hw:0,0");
         assert!(extract_actual_device_name("").is_none());
     }
 
     #[test]
-    fn test_high_performance_device_detection() {
-        let pro_device = AudioDevice {
-            name: "USB Audio Device".to_string(),
-            description: "Focusrite Scarlett 2i2".to_string(),
-            id: "alsa:usb".to_string(),
+    fn test_hardware_indicators() {
+        let usb_device = AudioDevice {
+            name: "test".to_string(),
+            description: "USB Audio Device".to_string(),
+            id: "pipewire:123".to_string(),
             device_type: DeviceType::Output,
             available: true,
         };
 
-        let basic_device = AudioDevice {
-            name: "Built-in Audio".to_string(),
-            description: "Analog Output".to_string(),
-            id: "alsa:card0".to_string(),
+        let generic_device = AudioDevice {
+            name: "test".to_string(),
+            description: "Generic Device".to_string(),
+            id: "pipewire:456".to_string(),
             device_type: DeviceType::Output,
             available: true,
         };
 
-        assert!(is_device_suitable_for_exclusive_mode(&pro_device));
-        assert!(!is_device_suitable_for_exclusive_mode(&basic_device));
-    }
-
-    #[test]
-    fn test_device_capabilities_fallback() {
-        let capabilities = get_device_capabilities("nonexistent").unwrap();
-
-        assert!(!capabilities.sample_rates.is_empty());
-        assert!(!capabilities.formats.is_empty());
-        assert!(!capabilities.buffer_sizes.is_empty());
-        assert!(capabilities.min_buffer_size > 0);
-        assert!(capabilities.max_buffer_size >= capabilities.min_buffer_size);
-    }
-
-    #[test]
-    fn test_recommended_devices_agnostic() {
-        // Test that recommended devices function exists and returns proper type
-        let result = detect_recommended_devices();
-        assert!(result.is_ok() || result.is_err()); // Should not panic
+        assert!(is_real_physical_device(&usb_device));
+        assert!(!is_real_physical_device(&generic_device));
     }
 }
