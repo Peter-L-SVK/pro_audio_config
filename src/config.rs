@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Configuration Module
- * Version: 2.0
+ * Version: 2.1
  * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  *

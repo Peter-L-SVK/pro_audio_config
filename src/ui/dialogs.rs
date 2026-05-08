@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - Dialogs Module
- * Version: 2.0
+ * Version: 2.1
  * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  *
@@ -63,9 +63,9 @@ pub fn show_about_dialog() {
 
     dialog.set_title("About Pro Audio Config");
     dialog.set_program_name("Pro Audio Config");
-    dialog.set_version(Some("2.0"));
+    dialog.set_version(Some("2.1"));
     dialog.set_website(Some("https://github.com/Peter-L-SVK/pro_audio_config"));
-    dialog.set_copyright(Some("Copyright © 2025 Peter Leukanič"));
+    dialog.set_copyright(Some("Copyright © 2025-2026 Peter Leukanič"));
     dialog.set_authors(&["Peter Leukanič"]);
     dialog.set_comments(Some(
         "Professional audio configuration tool for Linux\nWritten in Rust programming language and Gtk-3.0",
