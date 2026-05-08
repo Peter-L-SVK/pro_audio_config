@@ -1,6 +1,6 @@
 /*
  * Pro Audio Config - AudioApp Module
- * Version: 2.0
+ * Version: 2.1
  * Copyright (c) 2025-2026 Peter Leukanič
  * Under MIT License
  *
@@ -35,50 +35,62 @@ impl AudioApp {
     pub fn new(app: &Application) -> Self {
         let window = ApplicationWindow::new(app);
         window.set_title("Pro Audio Config");
+        window.set_default_size(900, 700);
 
-        // Set window icon from system or development location
+        // Set window icon
         Self::set_window_icon(&window);
 
-        // Create menu bar
-        let menu_bar = Self::create_menu_bar();
+        // ===== MAIN VERTICAL BOX - Stacks menu bar on top of content =====
+        let main_vbox = GtkBox::new(Orientation::Vertical, 0);
 
+        // ===== MENU BAR - Fixed at the very top =====
+        let menu_bar = MenuBar::new();
+
+        let help_menu = Menu::new();
+        let help_menu_item = MenuItem::with_label("Help");
+        help_menu_item.set_submenu(Some(&help_menu));
+
+        let about_item = MenuItem::with_label("About");
+        about_item.connect_activate(|_| {
+            show_about_dialog();
+        });
+
+        help_menu.append(&about_item);
+        menu_bar.append(&help_menu_item);
+
+        // Pack menu bar at the top of the main vbox
+        main_vbox.pack_start(&menu_bar, false, false, 0);
+
+        // ===== SCROLLABLE CONTENT AREA =====
         let scrolled_window = ScrolledWindow::new(None::<&Adjustment>, None::<&Adjustment>);
         scrolled_window.set_propagate_natural_height(true);
         scrolled_window.set_propagate_natural_width(true);
 
-        let main_box = GtkBox::new(Orientation::Vertical, 12);
-        main_box.set_margin_top(18);
-        main_box.set_margin_bottom(18);
-        main_box.set_margin_start(18);
-        main_box.set_margin_end(18);
-
-        // Add menu bar to main interface
-        main_box.pack_start(&menu_bar, false, false, 0);
+        let content_box = GtkBox::new(Orientation::Vertical, 12);
+        content_box.set_margin_top(18);
+        content_box.set_margin_bottom(18);
+        content_box.set_margin_start(18);
+        content_box.set_margin_end(18);
 
         // ===== CREATE NOTEBOOK (TABS) =====
         let notebook = Notebook::new();
 
-        // Create output tab
         let output_tab = AudioTab::new(TabType::Output);
         let output_label = Label::new(Some("Output"));
         notebook.append_page(&output_tab.container, Some(&output_label));
 
-        // Create input tab
         let input_tab = AudioTab::new(TabType::Input);
         let input_label = Label::new(Some("Input"));
         notebook.append_page(&input_tab.container, Some(&input_label));
 
-        // Create advanced tab
         let advanced_tab = AdvancedTab::new();
         let advanced_label = Label::new(Some("Advanced"));
         notebook.append_page(&advanced_tab.container, Some(&advanced_label));
 
-        // Create monitoring tab
         let monitoring_tab = MonitoringTab::new();
         let monitoring_label = Label::new(Some("Monitor"));
         notebook.append_page(&monitoring_tab.container, Some(&monitoring_label));
 
-        // Create config-inspector tab
         let config_inspector_tab = ConfigInspectorTab::new();
         let config_inspector_label = Label::new(Some("Config Inspector"));
         notebook.append_page(
@@ -86,9 +98,14 @@ impl AudioApp {
             Some(&config_inspector_label),
         );
 
-        main_box.pack_start(&notebook, true, true, 0);
-        scrolled_window.add(&main_box);
-        window.add(&scrolled_window);
+        content_box.pack_start(&notebook, true, true, 0);
+        scrolled_window.add(&content_box);
+
+        // Pack scrollable content below the menu bar
+        main_vbox.pack_start(&scrolled_window, true, true, 0);
+
+        // Add the main vbox to the window
+        window.add(&main_vbox);
 
         let app_state = Self {
             window,
@@ -100,13 +117,8 @@ impl AudioApp {
             config_inspector_tab,
         };
 
-        // ===== CONNECT SIGNALS =====
         app_state.setup_signals();
-
-        // ===== CONNECT ADVANCED TAB SIGNALS =====
         app_state.setup_advanced_signals();
-
-        // ===== DETECT ALL DEVICES AND CURRENT SETTINGS =====
         app_state.initialize_tabs();
 
         app_state
@@ -114,21 +126,9 @@ impl AudioApp {
 
     fn set_window_icon(window: &ApplicationWindow) {
         let icon_paths = [
-            // System installation paths (multiple sizes)
-            "/usr/share/icons/hicolor/16x16/apps/pro-audio-config.png",
             "/usr/share/icons/hicolor/48x48/apps/pro-audio-config.png",
-            "/usr/share/icons/hicolor/32x32/apps/pro-audio-config.png",
-            "/usr/share/icons/hicolor/256x256/apps/pro-audio-config.png",
-            // Development paths
-            "icons/48x48/pro-audio-config.png",
-            "icons/32x32/pro-audio-config.png",
             "icons/icon.png",
             "icon.png",
-            "../icons/icon.png",
-            "./icons/icon.png",
-            // Alternative system paths
-            "/usr/share/icons/hicolor/48x48/apps/pro-audio-config.png",
-            "/usr/local/share/icons/hicolor/48x48/apps/pro-audio-config.png",
         ];
 
         for path in &icon_paths {
@@ -139,28 +139,7 @@ impl AudioApp {
         }
     }
 
-    fn create_menu_bar() -> MenuBar {
-        let menu_bar = MenuBar::new();
-
-        // Create Help menu
-        let help_menu = Menu::new();
-        let help_menu_item = MenuItem::with_label("Help");
-        help_menu_item.set_submenu(Some(&help_menu));
-
-        // Create About item
-        let about_item = MenuItem::with_label("About");
-        about_item.connect_activate(|_| {
-            show_about_dialog();
-        });
-
-        help_menu.append(&about_item);
-        menu_bar.append(&help_menu_item);
-
-        menu_bar
-    }
-
     fn initialize_tabs(&self) {
-        // Initialize both tabs with the same pattern
         self.output_tab.detect_all_devices();
         self.input_tab.detect_all_devices();
         self.output_tab.detect_current_settings();
